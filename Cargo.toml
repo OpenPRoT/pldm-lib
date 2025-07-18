@@ -1,0 +1,9 @@
+[package]
+name = "pldm-lib"
+version = "0.1.0"
+authors = ["Caliptra contributors", "OpenPRoT contributors"]
+edition = "2024"
+
+[dependencies]
+zerocopy = {version = "0.8.17", features = ["derive"]}
+bitfield = "0.14.0"
