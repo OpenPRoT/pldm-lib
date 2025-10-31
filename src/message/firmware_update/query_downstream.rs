@@ -5,7 +5,7 @@ use crate::protocol::base::{
     PLDM_MSG_HEADER_LEN,
 };
 
-use crate::protocol::firmware_update::{Descriptor, FwUpdateCmd};
+use crate::protocol::firmware_update::{ComponentActivationMethods, Descriptor, FwUpdateCmd};
 use bitfield::bitfield;
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
@@ -238,6 +238,107 @@ impl DownstreamDescriptor {
     }
 }
 
+// #[derive(Debug, Clone, FromBytes, IntoBytes, Immutable, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
+#[repr(C, packed)]
+pub struct GetDownstreamFirmwareParametersRequest {
+    pub hdr: PldmMsgHeader<[u8; PLDM_MSG_HEADER_LEN]>,
+    pub data_transfer_handle: u32,
+    pub transfer_op_flag: u8,
+}
+
+impl GetDownstreamFirmwareParametersRequest {
+    pub fn new(
+        instance_id: InstanceId,
+        data_transfer_handle: u32,
+        transfer_op_flag: TransferOperationFlag,
+    ) -> Self {
+        GetDownstreamFirmwareParametersRequest {
+            hdr: PldmMsgHeader::new(
+                instance_id,
+                PldmMsgType::Request,
+                PldmSupportedType::FwUpdate,
+                FwUpdateCmd::GetDownstreamFirmwareParameters as u8,
+            ),
+            data_transfer_handle,
+            transfer_op_flag: transfer_op_flag as u8,
+        }
+    }
+}
+
+bitfield! {
+    #[derive(Clone, Copy, FromBytes, IntoBytes, Immutable, PartialEq, Eq)]
+    pub struct GetDownstreamFirmwareParametersCapability(u32);
+    impl Debug;
+    pub u32, reserved_0, _: 31, 10;
+    pub u32, secuirty_revision_number, set_secuirty_revision_number: 9;
+    pub u32, fdp_downgrade_restrictions, set_fdp_downgrade_restrictions: 8;
+    pub u32, fdp_update_mode_restrictions, set_fdp_update_mode_restrictions: 7, 4;
+    pub u32, reserved_1, _: 3;
+    pub u32, downstream_device_host_functionality, set_downstream_device_host_functionality: 2;
+    pub u32, component_update_failure_retry, set_component_update_failure_retry: 1;
+    pub u32, downstream_device_component_update_failure, set_downstream_device_component_update_failure: 0;
+}
+
+// #[derive(Debug, Clone, FromBytes, IntoBytes, Immutable, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct GetDownstreamFirmwareParametersResponse {
+    pub hdr: PldmMsgHeader<[u8; PLDM_MSG_HEADER_LEN]>,
+    pub completion_code: u8,
+    pub next_data_transfer_handle: u32,
+    pub transfer_flag: u8,
+
+    /// GetDownstreamFirmwareParametersPortion
+    ///
+    /// If the FDP has negotiated a PartSize as defined by DSP0240 and its NegotiateTransferParameters
+    /// command, then the maximum size for this field shall be equal to or less than that negotiated value.
+    /// Otherwise the FDP can determine the size for this field.
+    // TODO: check for PartSize and make this dynamic
+    pub portions: Option<[GetDownstreamFirmwareParametersPortion; DOWNSTREAM_DEVICE_PORTION_COUNT]>,
+}
+
+// #[derive(Debug, Clone, FromBytes, IntoBytes, Immutable, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
+#[repr(C)]
+pub struct GetDownstreamFirmwareParametersPortion {
+    pub get_downstream_firmware_parameters_capability: GetDownstreamFirmwareParametersCapability,
+    pub downstream_device_count: u16,
+    pub downstream_device_parameter_table: Option<[DownstreamDeviceParameterTable; 8]>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[repr(C)]
+pub struct DownstreamDeviceParameterTable {
+    pub downstream_device_index: u16,
+    pub active_component_comparison_stamp: u32,
+    pub active_component_version_string_type: u8, // See VersionStringType
+    pub active_component_version_string_length: u8,
+    pub active_component_release_date: [u8; 8], // YYYYMMDD
+    pub pending_component_comparison_stamp: u32,
+    pub pending_component_version_string_type: u8, // See VersionStringType
+    pub pending_component_version_string_length: u8,
+    pub pending_component_release_date: [u8; 8], // YYYYMMDD
+    pub component_activation_methods: ComponentActivationMethods,
+
+    // TODO: make this variable in length
+    pub active_component_version_string: Option<[u8; 0xff]>,
+
+    // TODO: make this variable in length
+    // "If no pending firmware component exists, this field is zero bytes in length"
+    pub pending_component_version_string: Option<[u8; 0xff]>,
+}
+
+bitfield! {
+    pub struct CapabilitiesDuringUpdate(u32);
+    impl Debug;
+    pub u32, reserved, _: 31, 5;
+    pub u32, component_security_level_latest, set_component_security_level_latest: 4;
+    pub u32, security_revision_number_updateable, set_security_revision_number_updateable: 3;
+    pub u32, component_downgrade_capability, set_component_downgrade_capability: 2;
+    pub u32, downstream_updateable, set_downstream_updateable: 1;
+    pub u32, downstream_apply_state, set_downstream_apply_state: 0;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -289,6 +390,24 @@ mod tests {
         assert_eq!(ds.downstream_device_index, 10);
         assert_eq!(ds.downstream_descriptor_count, 0);
         assert!(ds.downstream_descriptors.is_none());
+    }
+
+    #[test]
+    fn test_get_downstream_firmware_parameters_request_manual() {
+        let req = GetDownstreamFirmwareParametersRequest {
+            hdr: PldmMsgHeader::new(
+                6,
+                PldmMsgType::Request,
+                PldmSupportedType::FwUpdate,
+                FwUpdateCmd::GetDownstreamFirmwareParameters as u8,
+            ),
+            data_transfer_handle: 0xAABBCCDD,
+            transfer_op_flag: 0,
+        };
+        assert_eq!(req.hdr.instance_id(), 6);
+        let handle = req.data_transfer_handle;
+        assert_eq!(handle, 0xAABBCCDD);
+        assert_eq!(req.transfer_op_flag, 0);
     }
 
     #[test]
