@@ -3,6 +3,7 @@
 pub mod activate_fw;
 pub mod apply_complete;
 pub mod get_fw_params;
+pub mod get_package_data;
 pub mod get_status;
 pub mod pass_component;
 pub mod query_devid;
