@@ -213,6 +213,99 @@ impl<'a> GetDeviceMetaDataResponse<'a> {
     }
 }
 
+/// The FD sends this command to transfer the data that was originally obtained by the UA through the
+/// [GetDeviceMetaData] command. This command shall only be used if the FD indicated in the
+/// [RequestUpdate] response that it had device metadata that needed to be obtained by the UA. The FD can
+/// send this command when it is in any state, except the IDLE and LEARN COMPONENTS state.
+pub struct GetMetaDataRequest {
+    pub hdr: PldmMsgHeader<[u8; PLDM_MSG_HEADER_LEN]>,
+    pub data_transfer_handle: u32,
+    pub transfer_operation_flag: u8,
+}
+
+impl GetMetaDataRequest {
+    pub fn new(
+        instance_id: InstanceId,
+        data_transfer_handle: u32,
+        transfer_operation_flag: TransferOperationFlag,
+    ) -> Self {
+        GetMetaDataRequest {
+            hdr: PldmMsgHeader::new(
+                instance_id,
+                PldmMsgType::Request,
+                PldmSupportedType::FwUpdate,
+                FwUpdateCmd::GetMetaData as u8,
+            ),
+            data_transfer_handle,
+            transfer_operation_flag: transfer_operation_flag as u8,
+        }
+    }
+}
+
+pub enum GetMetaDataCodes {
+    BaseCodes(protocol::base::PldmBaseCompletionCode),
+    CommandNotExpected,
+    InvalidTransferHandle,
+    InvalidTransferOperationFlag,
+}
+
+impl From<GetMetaDataCodes> for u8 {
+    fn from(code: GetMetaDataCodes) -> Self {
+        match code {
+            GetMetaDataCodes::BaseCodes(code) => code as u8,
+            GetMetaDataCodes::CommandNotExpected => {
+                FwUpdateCompletionCode::CommandNotExpected as u8
+            }
+            GetMetaDataCodes::InvalidTransferHandle => {
+                FwUpdateCompletionCode::InvalidTransferHandle as u8
+            }
+            GetMetaDataCodes::InvalidTransferOperationFlag => {
+                FwUpdateCompletionCode::InvalidTransferOperationFlag as u8
+            }
+        }
+    }
+}
+
+pub struct GetMetaDataResponse<'a> {
+    pub hdr: PldmMsgHeader<[u8; PLDM_MSG_HEADER_LEN]>,
+
+    /// PLDM_BASE_CODES, COMMAND_NOT_EXPECTED, INVALID_TRANSFER_HANDLE,
+    /// INVALID_TRANSFER_OPERATION_FLAG
+    pub completion_code: u8,
+    pub next_data_transfer_handle: u32,
+    pub transfer_flag: u8,
+
+    /// The UA should select the amount of data to return such that the byte length for this field, except
+    /// when TransferFlag = End or StartAndEnd, is equal to or between the values of the firmware update
+    /// baseline transfer size and MaximumTransferSize from the [RequestUpdate] or
+    /// [RequestDownstreamDeviceUpdate] command. When TransferFlag = End or StartAndEnd, the
+    /// variable size of this field can also be less than the firmware update baseline transfer size.
+    pub portion_of_device_metadata: &'a [u8],
+}
+
+impl<'a> GetMetaDataResponse<'a> {
+    pub fn new(
+        instance_id: InstanceId,
+        completion_code: GetMetaDataCodes,
+        next_data_transfer_handle: u32,
+        transfer_flag: TransferOperationFlag,
+        portion_of_device_metadata: &'a [u8],
+    ) -> Self {
+        GetMetaDataResponse {
+            hdr: PldmMsgHeader::new(
+                instance_id,
+                PldmMsgType::Response,
+                PldmSupportedType::FwUpdate,
+                FwUpdateCmd::GetMetaData as u8,
+            ),
+            completion_code: completion_code.into(),
+            next_data_transfer_handle,
+            transfer_flag: transfer_flag as u8,
+            portion_of_device_metadata,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::protocol;
