@@ -338,6 +338,96 @@ bitfield! {
     pub u32, downstream_updateable, set_downstream_updateable: 1;
     pub u32, downstream_apply_state, set_downstream_apply_state: 0;
 }
+// DMTF0267 12.17
+#[derive(Debug, Clone, FromBytes, Immutable, PartialEq)]
+pub struct RequestDownstreamDeviceUpdateRequest {
+    pub hdr: PldmMsgHeader<[u8; PLDM_MSG_HEADER_LEN]>,
+    // "This value shall be equal to or greater than firmware update baseline transfer size"
+    // See section 7.8
+    pub max_downstream_device_transfer_size: u32,
+    pub max_outstanding_transfer_requests: u8,
+    pub downstream_device_pkg_data_length: u16,
+}
+
+impl RequestDownstreamDeviceUpdateRequest {
+    pub fn new(
+        instance_id: InstanceId,
+        max_downstream_device_transfer_size: u32,
+        max_outstanding_transfer_requests: u8,
+        downstream_device_pkg_data_length: u16,
+    ) -> Self {
+        RequestDownstreamDeviceUpdateRequest {
+            hdr: PldmMsgHeader::new(
+                instance_id,
+                PldmMsgType::Request,
+                PldmSupportedType::FwUpdate,
+                FwUpdateCmd::RequestDownstreamDeviceUpdate as u8,
+            ),
+            max_downstream_device_transfer_size,
+            max_outstanding_transfer_requests,
+            downstream_device_pkg_data_length,
+        }
+    }
+}
+
+pub enum DDWillSendGetPackageDataCommand {
+    FDPShouldObtainUALimited = 0x02,
+    FDPShouldObtainLearn = 0x01,
+    FDPNoSupport = 0x00,
+}
+
+impl TryFrom<u8> for DDWillSendGetPackageDataCommand {
+    type Error = ();
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0x02 => Ok(DDWillSendGetPackageDataCommand::FDPShouldObtainUALimited),
+            0x01 => Ok(DDWillSendGetPackageDataCommand::FDPShouldObtainLearn),
+            0x00 => Ok(DDWillSendGetPackageDataCommand::FDPNoSupport),
+            _ => Err(()),
+        }
+    }
+}
+
+impl From<DDWillSendGetPackageDataCommand> for u8 {
+    fn from(cmd: DDWillSendGetPackageDataCommand) -> Self {
+        match cmd {
+            DDWillSendGetPackageDataCommand::FDPShouldObtainUALimited => 0x02,
+            DDWillSendGetPackageDataCommand::FDPShouldObtainLearn => 0x01,
+            DDWillSendGetPackageDataCommand::FDPNoSupport => 0x00,
+        }
+    }
+}
+
+pub struct RequestDownstreamDeviceUpdateResponse {
+    pub hdr: PldmMsgHeader<[u8; PLDM_MSG_HEADER_LEN]>,
+    pub completion_code: u8,
+    pub downstream_device_metadata_length: u16,
+    pub pkg_data_command: u8,
+    pub get_pkg_data_max_transfer_size: u16,
+}
+
+impl RequestDownstreamDeviceUpdateResponse {
+    pub fn new(
+        instance_id: InstanceId,
+        completion_code: u8,
+        downstream_device_metadata_length: u16,
+        pkg_data_command: DDWillSendGetPackageDataCommand,
+        get_pkg_data_max_transfer_size: u16,
+    ) -> Self {
+        RequestDownstreamDeviceUpdateResponse {
+            hdr: PldmMsgHeader::new(
+                instance_id,
+                PldmMsgType::Response,
+                PldmSupportedType::FwUpdate,
+                FwUpdateCmd::RequestDownstreamDeviceUpdate as u8,
+            ),
+            completion_code,
+            downstream_device_metadata_length,
+            pkg_data_command: pkg_data_command.into(),
+            get_pkg_data_max_transfer_size,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
