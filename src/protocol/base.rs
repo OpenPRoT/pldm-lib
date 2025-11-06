@@ -90,7 +90,7 @@ pub enum PldmHeaderVersion {
     Version0 = 0x00,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u8)]
 pub enum PldmBaseCompletionCode {
     Success = 0x00,
@@ -256,10 +256,46 @@ impl PldmFailureResponse {
     }
 }
 
+/// Macro to define PLDM completion code enum with base codes and custom codes.
+/// By default, the entire [PldmBaseCompletionCode] is included as a
+/// variant named `BaseCodes`. The additional custom completion codes can be
+/// specified as variants, e.g. [FwUpdateCompletionCode].
+///
+/// This macro is useful for the completion codes for the command responses, to ensure
+/// type safety while still allowing the use of base completion codes and an
+/// arbitrary number of custom completion codes specific to the command.
+#[macro_export]
+macro_rules! pldm_completion_code {
+    (
+        $enum_name:ident {
+            $($variant:ident),* $(,)?
+        }
+    ) => {
+        pub enum $enum_name {
+            BaseCodes(PldmBaseCompletionCode),
+            $($variant),*
+        }
+
+        impl From<$enum_name> for u8 {
+            fn from(code: $enum_name) -> Self {
+                match code {
+                    $enum_name::BaseCodes(code) => code as u8,
+                    $(
+                        $enum_name::$variant => {
+                            FwUpdateCompletionCode::$variant as u8
+                        }
+                    )*
+                }
+            }
+        }
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::codec::PldmCodec;
+    use crate::protocol::firmware_update::FwUpdateCompletionCode;
 
     #[test]
     fn test_pldm_msg_header() {
@@ -298,5 +334,23 @@ mod tests {
 
         let decoded_resp = PldmFailureResponse::decode(&buffer).unwrap();
         assert_eq!(resp, decoded_resp);
+    }
+
+    #[test]
+    fn test_pldm_completion_code_macro() {
+        pldm_completion_code! {
+            TestEnum {
+                InvalidStateForCommand,
+                NoDeviceMetadata,
+                InvalidTransferHandle,
+                InvalidTransferOperationFlag,
+                PackageDataError,
+            }
+        }
+
+        let base = TestEnum::BaseCodes(PldmBaseCompletionCode::Success);
+        if let TestEnum::BaseCodes(i) = base {
+            assert_eq!(i, PldmBaseCompletionCode::Success);
+        }
     }
 }
