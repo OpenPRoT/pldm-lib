@@ -93,6 +93,9 @@ pub enum FwUpdateCompletionCode {
     InvalidTransferOperationFlag = 0x91,
     ActivatePendingImageNotPermitted = 0x92,
     PackageDataError = 0x93,
+    NoOpaqueData = 0x94,
+    UpdateSecurityRevisionNotPermitted = 0x95,
+    DownstreamDeviceListChanged = 0x96,
 }
 
 impl TryFrom<u8> for FwUpdateCompletionCode {

@@ -1,18 +1,23 @@
 // Licensed under the Apache-2.0 license
 
 use crate::protocol::base::{
-    InstanceId, PldmMsgHeader, PldmMsgType, PldmSupportedType, TransferOperationFlag,
-    PLDM_MSG_HEADER_LEN,
+    InstanceId, PldmBaseCompletionCode, PldmMsgHeader, PldmMsgType, PldmSupportedType,
+    TransferOperationFlag, PLDM_MSG_HEADER_LEN,
 };
 
-use crate::protocol::firmware_update::{ComponentActivationMethods, Descriptor, FwUpdateCmd};
+use crate::pldm_completion_code;
+
+use crate::protocol::firmware_update::{
+    ComponentActivationMethods, Descriptor, FwUpdateCmd, FwUpdateCompletionCode,
+};
 use bitfield::bitfield;
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
-/// QueryDownstreamDevices is used by the UA to obtain the firmware identifiers for the downstream devices supported
-/// by the FDP. The entire list of all attached downstream devices is provided by the response to
-/// QueryDownstreamIdentifiers command. The FDP shall provide a response message to this command in
-/// all states, including IDLE.
+/// QueryDownstreamDevices is used by the UA to obtain the firmware identifiers
+/// for the downstream devices supported by the FDP. The entire list of all
+/// attached downstream devices is provided by the response to
+/// [QueryDownstreamIdentifiers] command. The FDP shall provide a response
+/// message to this command in all states, including IDLE.
 #[derive(Debug, Clone, FromBytes, IntoBytes, Immutable, PartialEq)]
 #[repr(C, packed)]
 pub struct QueryDownstreamDevicesRequest {
@@ -45,7 +50,8 @@ bitfield! {
 #[derive(Debug, Clone, FromBytes, Immutable, PartialEq)]
 pub struct QueryDownstreamDeviceResponse {
     pub hdr: PldmMsgHeader<[u8; PLDM_MSG_HEADER_LEN]>,
-    // TODO: the spec also states to use enum8 here, so let's define some enums
+
+    /// PLDM_BASE_CODES
     pub completion_code: u8,
     pub downstream_device_update_supported: u8,
     pub number_of_downstream_devices: u16,
@@ -56,7 +62,7 @@ pub struct QueryDownstreamDeviceResponse {
 impl QueryDownstreamDeviceResponse {
     pub fn new(
         instance_id: InstanceId,
-        completion_code: u8,
+        completion_code: PldmBaseCompletionCode,
         downstream_device_update_supported: u8,
         number_of_downstream_devices: u16,
         maximum_number_of_downstream_devices: u16,
@@ -68,7 +74,7 @@ impl QueryDownstreamDeviceResponse {
                 PldmSupportedType::FwUpdate,
                 FwUpdateCmd::QueryDownstreamDevices as u8,
             ),
-            completion_code,
+            completion_code: completion_code as u8,
             downstream_device_update_supported,
             number_of_downstream_devices,
             max_number_of_downstream_devices: maximum_number_of_downstream_devices,
@@ -109,12 +115,23 @@ pub const DOWNSTREAM_DEVICE_PORTION_COUNT: usize = 4;
 pub const DOWNSTREAM_DEVICE_COUNT: usize = 8;
 pub const DOWNSTREAM_DESCRIPTOR_COUNT: usize = 4;
 
-// #[derive(Debug, Clone, Immutable, PartialEq)]
+pldm_completion_code! {
+    QueryDownstreamIdentifiersResponseCode {
+        InvalidTransferHandle,
+        InvalidTransferOperationFlag,
+        DownstreamDeviceListChanged,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 #[repr(C)]
-// TODO
 pub struct QueryDownstreamIdentifiersResponse {
     pub hdr: PldmMsgHeader<[u8; PLDM_MSG_HEADER_LEN]>,
+
+    /// PLDM_BASE_CODES, INVALID_TRANSFER_HANDLE, INVALID_TRANSFER_OPERATION_FLAG,
+    /// DOWNSTREAM_DEVICE_LIST_CHANGED
+    ///
+    /// See [QueryDownstreamIdentifiersResponseCode].
     pub completion_code: u8,
     pub next_data_transfer_handle: u32,
     pub transfer_flag: u8,
@@ -131,7 +148,7 @@ pub struct QueryDownstreamIdentifiersResponse {
 impl QueryDownstreamIdentifiersResponse {
     pub fn new(
         instance_id: InstanceId,
-        completion_code: u8,
+        completion_code: QueryDownstreamIdentifiersResponseCode,
         next_data_transfer_handle: u32,
         transfer_flag: u8,
         portions: Option<&[QueryDownstreamIdentifiersPortion; DOWNSTREAM_DEVICE_PORTION_COUNT]>,
@@ -144,7 +161,7 @@ impl QueryDownstreamIdentifiersResponse {
                 PldmSupportedType::FwUpdate,
                 FwUpdateCmd::QueryDownstreamIdentifiers as u8,
             ),
-            completion_code,
+            completion_code: completion_code.into(),
             next_data_transfer_handle,
             transfer_flag,
             portions,
@@ -280,10 +297,23 @@ bitfield! {
     pub u32, downstream_device_component_update_failure, set_downstream_device_component_update_failure: 0;
 }
 
-// #[derive(Debug, Clone, FromBytes, IntoBytes, Immutable, PartialEq)]
+pldm_completion_code! {
+    GetDownstreamFirmwareParametersResponseCode {
+        InvalidTransferHandle,
+        InvalidTransferOperationFlag,
+        DownstreamDeviceListChanged
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
+#[repr(C)]
 pub struct GetDownstreamFirmwareParametersResponse {
     pub hdr: PldmMsgHeader<[u8; PLDM_MSG_HEADER_LEN]>,
+
+    /// PLDM_BASE_CODES, INVALID_TRANSFER_HANDLE, INVALID_TRANSFER_OPERATION_FLAG,
+    /// DOWNSTREAM_DEVICE_LIST_CHANGED
+    ///
+    /// See [GetDownstreamFirmwareParametersResponseCode].
     pub completion_code: u8,
     pub next_data_transfer_handle: u32,
     pub transfer_flag: u8,
@@ -326,6 +356,29 @@ pub struct DownstreamDeviceParameterTable {
     // TODO: make this variable in length
     // "If no pending firmware component exists, this field is zero bytes in length"
     pub pending_component_version_string: Option<[u8; 0xff]>,
+}
+
+impl GetDownstreamFirmwareParametersResponse {
+    pub fn new(
+        instance_id: InstanceId,
+        completion_code: GetDownstreamFirmwareParametersResponseCode,
+        next_data_transfer_handle: u32,
+        transfer_flag: u8,
+        portions: Option<[GetDownstreamFirmwareParametersPortion; DOWNSTREAM_DEVICE_PORTION_COUNT]>,
+    ) -> Self {
+        GetDownstreamFirmwareParametersResponse {
+            hdr: PldmMsgHeader::new(
+                instance_id,
+                PldmMsgType::Response,
+                PldmSupportedType::FwUpdate,
+                FwUpdateCmd::GetDownstreamFirmwareParameters as u8,
+            ),
+            completion_code: completion_code.into(),
+            next_data_transfer_handle,
+            transfer_flag,
+            portions,
+        }
+    }
 }
 
 bitfield! {
@@ -398,8 +451,21 @@ impl From<DDWillSendGetPackageDataCommand> for u8 {
     }
 }
 
+pldm_completion_code! {
+    RequestDownstreamDeviceUpdateCode {
+        AlreadyInUpdateMode,
+        UnableToInitiateUpdate,
+        RetryRequestUpdate
+    }
+}
+
 pub struct RequestDownstreamDeviceUpdateResponse {
     pub hdr: PldmMsgHeader<[u8; PLDM_MSG_HEADER_LEN]>,
+
+    /// PLDM_BASE_CODES, ALREADY_IN_UPDATE_MODE, UNABLE_TO_INITIATE_UPDATE,
+    /// RETRY_REQUEST_UPDATE
+    ///
+    /// See [RequestDownstreamDeviceUpdateCode].
     pub completion_code: u8,
     pub downstream_device_metadata_length: u16,
     pub pkg_data_command: u8,
@@ -409,7 +475,7 @@ pub struct RequestDownstreamDeviceUpdateResponse {
 impl RequestDownstreamDeviceUpdateResponse {
     pub fn new(
         instance_id: InstanceId,
-        completion_code: u8,
+        completion_code: RequestDownstreamDeviceUpdateCode,
         downstream_device_metadata_length: u16,
         pkg_data_command: DDWillSendGetPackageDataCommand,
         get_pkg_data_max_transfer_size: u16,
@@ -421,7 +487,7 @@ impl RequestDownstreamDeviceUpdateResponse {
                 PldmSupportedType::FwUpdate,
                 FwUpdateCmd::RequestDownstreamDeviceUpdate as u8,
             ),
-            completion_code,
+            completion_code: completion_code.into(),
             downstream_device_metadata_length,
             pkg_data_command: pkg_data_command.into(),
             get_pkg_data_max_transfer_size,
@@ -440,7 +506,8 @@ mod tests {
 
     #[test]
     fn test_query_downstream_device_response_new() {
-        let resp = QueryDownstreamDeviceResponse::new(2, 0x00, 0x01, 5, 10);
+        let resp =
+            QueryDownstreamDeviceResponse::new(2, PldmBaseCompletionCode::Success, 0x01, 5, 10);
         assert_eq!(resp.hdr.instance_id(), 2);
         assert_eq!(resp.completion_code, 0x00);
         assert_eq!(resp.downstream_device_update_supported, 0x01);
@@ -461,9 +528,21 @@ mod tests {
             portion.clone(),
             portion.clone(),
         ];
-        let resp = QueryDownstreamIdentifiersResponse::new(4, 0x00, 0x1234, 1, Some(&portions_arr));
+        let resp = QueryDownstreamIdentifiersResponse::new(
+            4,
+            QueryDownstreamIdentifiersResponseCode::BaseCodes(PldmBaseCompletionCode::Success),
+            0x1234,
+            1,
+            Some(&portions_arr),
+        );
+
         assert_eq!(resp.hdr.instance_id(), 4);
-        assert_eq!(resp.completion_code, 0x00);
+        assert_eq!(
+            QueryDownstreamIdentifiersResponseCode::BaseCodes(
+                PldmBaseCompletionCode::try_from(resp.completion_code).unwrap()
+            ),
+            QueryDownstreamIdentifiersResponseCode::BaseCodes(PldmBaseCompletionCode::Success),
+        );
         assert_eq!(resp.next_data_transfer_handle, 0x1234);
         assert_eq!(resp.transfer_flag, 1);
         assert!(resp.portions.is_some());

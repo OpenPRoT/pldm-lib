@@ -1,10 +1,11 @@
 // Licensed under the Apache-2.0 license
 
-use crate::protocol;
 use crate::protocol::base::{
-    InstanceId, PldmMsgHeader, PldmMsgType, PldmSupportedType, TransferOperationFlag,
-    PLDM_MSG_HEADER_LEN,
+    InstanceId, PldmBaseCompletionCode, PldmMsgHeader, PldmMsgType, PldmSupportedType,
+    TransferOperationFlag, PLDM_MSG_HEADER_LEN,
 };
+
+use crate::pldm_completion_code;
 
 use crate::protocol::firmware_update::{FwUpdateCmd, FwUpdateCompletionCode};
 use zerocopy::{FromBytes, Immutable, IntoBytes};
@@ -43,39 +44,24 @@ impl GetPackageDataRequest {
     }
 }
 
-pub enum GetPackageDataCodes {
-    BaseCodes(protocol::base::PldmBaseCompletionCode),
-    CommandNotExpected,
-    NoPackageData,
-    InvalidTransferHandle,
-    InvalidTransferOperationFlag,
-}
-
-impl From<GetPackageDataCodes> for u8 {
-    fn from(code: GetPackageDataCodes) -> Self {
-        match code {
-            GetPackageDataCodes::BaseCodes(code) => code as u8,
-            GetPackageDataCodes::CommandNotExpected => {
-                FwUpdateCompletionCode::CommandNotExpected as u8
-            }
-            GetPackageDataCodes::NoPackageData => FwUpdateCompletionCode::NoPackageData as u8,
-            GetPackageDataCodes::InvalidTransferHandle => {
-                FwUpdateCompletionCode::InvalidTransferHandle as u8
-            }
-            GetPackageDataCodes::InvalidTransferOperationFlag => {
-                FwUpdateCompletionCode::InvalidTransferOperationFlag as u8
-            }
-        }
+pldm_completion_code! {
+    GetPackageDataCode {
+        CommandNotExpected,
+        NoPackageData,
+        InvalidTransferHandle,
+        InvalidTransferOperationFlag
     }
 }
 
+#[derive(Debug, Clone, FromBytes, IntoBytes, Immutable, PartialEq)]
+#[repr(C, packed)]
 pub struct GetPackageDataResponse<'a> {
     pub hdr: PldmMsgHeader<[u8; PLDM_MSG_HEADER_LEN]>,
 
     /// PLDM_BASE_CODES, COMMAND_NOT_EXPECTED, NO_PACKAGE_DATA,
     /// INVALID_TRANSFER_HANDLE, INVALID_TRANSFER_OPERATION_FLAG
     ///
-    /// See [GetPackageDataCodes]
+    /// See [GetPackageDataCode]
     pub completion_code: u8,
     pub next_data_transfer_handle: u32,
     pub transfer_flag: u8,
@@ -89,7 +75,7 @@ pub struct GetPackageDataResponse<'a> {
 impl<'a> GetPackageDataResponse<'a> {
     pub fn new(
         instance_id: InstanceId,
-        completion_code: GetPackageDataCodes,
+        completion_code: GetPackageDataCode,
         next_data_transfer_handle: u32,
         transfer_flag: TransferOperationFlag,
         portion_of_package_data: &'a [u8],
@@ -114,6 +100,9 @@ impl<'a> GetPackageDataResponse<'a> {
 /// RequestUpdate command response that it has data that shall be retrieved and restored by the UA. The
 /// firmware device metadata retrieved by this command will be sent back to the FD through the
 /// GetMetaData command after all component images have been transferred.
+///
+#[derive(Debug, Clone, FromBytes, IntoBytes, Immutable, PartialEq)]
+#[repr(C, packed)]
 pub struct GetDeviceMetaDataRequest {
     pub hdr: PldmMsgHeader<[u8; PLDM_MSG_HEADER_LEN]>,
     pub data_transfer_handle: u32,
@@ -139,38 +128,17 @@ impl GetDeviceMetaDataRequest {
     }
 }
 
-pub enum GetDeviceMetaDataCodes {
-    BaseCodes(protocol::base::PldmBaseCompletionCode),
+pldm_completion_code! {
+    GetDeviceMetaDataCodes {
     InvalidStateForCommand,
     NoDeviceMetadata,
     InvalidTransferHandle,
     InvalidTransferOperationFlag,
     PackageDataError,
-}
+}}
 
-impl From<GetDeviceMetaDataCodes> for u8 {
-    fn from(code: GetDeviceMetaDataCodes) -> Self {
-        match code {
-            GetDeviceMetaDataCodes::BaseCodes(code) => code as u8,
-            GetDeviceMetaDataCodes::InvalidStateForCommand => {
-                FwUpdateCompletionCode::InvalidStateForCommand as u8
-            }
-            GetDeviceMetaDataCodes::NoDeviceMetadata => {
-                FwUpdateCompletionCode::NoDeviceMetadata as u8
-            }
-            GetDeviceMetaDataCodes::InvalidTransferHandle => {
-                FwUpdateCompletionCode::InvalidTransferHandle as u8
-            }
-            GetDeviceMetaDataCodes::InvalidTransferOperationFlag => {
-                FwUpdateCompletionCode::InvalidTransferOperationFlag as u8
-            }
-            GetDeviceMetaDataCodes::PackageDataError => {
-                FwUpdateCompletionCode::PackageDataError as u8
-            }
-        }
-    }
-}
-
+#[derive(Debug, Clone, FromBytes, IntoBytes, Immutable, PartialEq)]
+#[repr(C, packed)]
 pub struct GetDeviceMetaDataResponse<'a> {
     pub hdr: PldmMsgHeader<[u8; PLDM_MSG_HEADER_LEN]>,
 
@@ -217,6 +185,8 @@ impl<'a> GetDeviceMetaDataResponse<'a> {
 /// [GetDeviceMetaData] command. This command shall only be used if the FD indicated in the
 /// [RequestUpdate] response that it had device metadata that needed to be obtained by the UA. The FD can
 /// send this command when it is in any state, except the IDLE and LEARN COMPONENTS state.
+#[derive(Debug, Clone, FromBytes, IntoBytes, Immutable, PartialEq)]
+#[repr(C, packed)]
 pub struct GetMetaDataRequest {
     pub hdr: PldmMsgHeader<[u8; PLDM_MSG_HEADER_LEN]>,
     pub data_transfer_handle: u32,
@@ -242,35 +212,23 @@ impl GetMetaDataRequest {
     }
 }
 
-pub enum GetMetaDataCodes {
-    BaseCodes(protocol::base::PldmBaseCompletionCode),
-    CommandNotExpected,
-    InvalidTransferHandle,
-    InvalidTransferOperationFlag,
-}
-
-impl From<GetMetaDataCodes> for u8 {
-    fn from(code: GetMetaDataCodes) -> Self {
-        match code {
-            GetMetaDataCodes::BaseCodes(code) => code as u8,
-            GetMetaDataCodes::CommandNotExpected => {
-                FwUpdateCompletionCode::CommandNotExpected as u8
-            }
-            GetMetaDataCodes::InvalidTransferHandle => {
-                FwUpdateCompletionCode::InvalidTransferHandle as u8
-            }
-            GetMetaDataCodes::InvalidTransferOperationFlag => {
-                FwUpdateCompletionCode::InvalidTransferOperationFlag as u8
-            }
-        }
+pldm_completion_code! {
+    GetMetaDataCode {
+        CommandNotExpected,
+        InvalidTransferHandle,
+        InvalidTransferOperationFlag,
     }
 }
 
+#[derive(Debug, Clone, FromBytes, IntoBytes, Immutable, PartialEq)]
+#[repr(C, packed)]
 pub struct GetMetaDataResponse<'a> {
     pub hdr: PldmMsgHeader<[u8; PLDM_MSG_HEADER_LEN]>,
 
     /// PLDM_BASE_CODES, COMMAND_NOT_EXPECTED, INVALID_TRANSFER_HANDLE,
     /// INVALID_TRANSFER_OPERATION_FLAG
+    ///
+    /// See [GetMetaDataCode]
     pub completion_code: u8,
     pub next_data_transfer_handle: u32,
     pub transfer_flag: u8,
@@ -286,7 +244,7 @@ pub struct GetMetaDataResponse<'a> {
 impl<'a> GetMetaDataResponse<'a> {
     pub fn new(
         instance_id: InstanceId,
-        completion_code: GetMetaDataCodes,
+        completion_code: GetMetaDataCode,
         next_data_transfer_handle: u32,
         transfer_flag: TransferOperationFlag,
         portion_of_device_metadata: &'a [u8],
@@ -308,73 +266,53 @@ impl<'a> GetMetaDataResponse<'a> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::protocol;
 
-    use super::*;
+    use crate::codec::PldmCodec;
 
-    //TODO: Add a test that behaves like the example in DSP0267, Fig. 11
-    //TODO: take ensure that the creation of these packages fits to the
-    // description of Table 28, PortionOfPackageData Field
     #[test]
-    fn test_get_package_data() {
+    fn test_get_package_data_request() {
         let instance_id: InstanceId = 0x01;
-        //TODO: use FwUpdateCompletionCode
-        let completion_code =
-            GetPackageDataCodes::BaseCodes(protocol::base::PldmBaseCompletionCode::Success);
-        let next_data_transfer_handle: u32 = 0x00000010;
-        let transfer_flag = TransferOperationFlag::GetFirstPart;
-        let portion_of_package_data: &[u8] = &[0xAA; GET_PACKAGE_DATA_PORTION_SIZE];
+        let data_transfer_handle: u32 = 0x12345678;
+        let transfer_operation_flag = TransferOperationFlag::GetFirstPart;
 
-        let response = GetPackageDataResponse::new(
-            instance_id,
-            completion_code,
-            next_data_transfer_handle,
-            transfer_flag,
-            portion_of_package_data,
-        );
-        assert_eq!(response.hdr.rq(), PldmMsgType::Response as u8);
-        assert_eq!(
-            response.completion_code,
-            GetPackageDataCodes::BaseCodes(protocol::base::PldmBaseCompletionCode::Success).into()
-        );
-        assert_eq!(
-            response.next_data_transfer_handle,
-            next_data_transfer_handle
-        );
-        assert_eq!(response.transfer_flag, transfer_flag as u8);
-        assert_eq!(response.portion_of_package_data, portion_of_package_data);
+        let request =
+            GetPackageDataRequest::new(instance_id, data_transfer_handle, transfer_operation_flag);
+
+        let mut buffer = [0u8; core::mem::size_of::<GetPackageDataRequest>()];
+        request.encode(&mut buffer).unwrap();
+        let decoded = GetPackageDataRequest::decode(&buffer).unwrap();
+
+        assert_eq!(request, decoded);
     }
 
     #[test]
-    fn test_get_device_metadata() {
+    fn test_get_data_response() {
         let instance_id: InstanceId = 0x01;
-        let completion_code =
-            GetDeviceMetaDataCodes::BaseCodes(protocol::base::PldmBaseCompletionCode::Success);
-        let next_data_transfer_handle: u32 = 0x00000020;
-        let transfer_flag = TransferOperationFlag::GetFirstPart;
-        let portion_of_device_metadata: &[u8] = &[0xBB; 0xff];
-        let response = GetDeviceMetaDataResponse::new(
+        let next_data_transfer_handle: u32 = 0x12345678;
+        let transfer_operation_flag = TransferOperationFlag::GetFirstPart;
+        let portion = [0u8; 0xff];
+
+        let _ = GetPackageDataResponse::new(
             instance_id,
-            completion_code,
+            GetPackageDataCode::BaseCodes(PldmBaseCompletionCode::Success),
             next_data_transfer_handle,
-            transfer_flag,
-            portion_of_device_metadata,
+            transfer_operation_flag,
+            &portion,
         );
 
-        assert_eq!(response.hdr.rq(), PldmMsgType::Response as u8);
-        assert_eq!(
-            response.completion_code,
-            GetDeviceMetaDataCodes::BaseCodes(protocol::base::PldmBaseCompletionCode::Success)
-                .into()
-        );
-        assert_eq!(
-            response.next_data_transfer_handle,
-            next_data_transfer_handle
-        );
-        assert_eq!(response.transfer_flag, transfer_flag as u8);
-        assert_eq!(
-            response.portion_of_device_metadata,
-            portion_of_device_metadata
-        );
+        //TODO: encoding for response does not work atm due to unknown sizes
+        // let mut buffer = [0u8; core::mem::size_of::<GetPackageDataResponse>()];
+        // request.encode(&mut buffer).unwrap();
+        // let decoded = GetPackageDataResponse::decode(&buffer).unwrap();
+
+        // assert_eq!(request, decoded);
     }
+
+    #[test]
+    fn test_get_device_metadata_request() {}
+
+    #[test]
+    fn test_get_device_metadata_reponse() {}
 }

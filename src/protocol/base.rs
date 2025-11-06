@@ -271,6 +271,7 @@ macro_rules! pldm_completion_code {
             $($variant:ident),* $(,)?
         }
     ) => {
+        #[derive(PartialEq, Debug)]
         pub enum $enum_name {
             BaseCodes(PldmBaseCompletionCode),
             $($variant),*
