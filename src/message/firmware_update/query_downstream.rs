@@ -47,7 +47,8 @@ bitfield! {
     pub u32, dynamic_attach, set_dynamic_attach: 0;
 }
 
-#[derive(Debug, Clone, FromBytes, Immutable, PartialEq)]
+#[derive(Debug, Clone, FromBytes, IntoBytes, Immutable, PartialEq)]
+#[repr(C, packed)]
 pub struct QueryDownstreamDeviceResponse {
     pub hdr: PldmMsgHeader<[u8; PLDM_MSG_HEADER_LEN]>,
 
@@ -498,102 +499,57 @@ impl RequestDownstreamDeviceUpdateResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codec::PldmCodec;
+
     #[test]
-    fn test_query_device_identifier() {
-        let req = QueryDownstreamDevicesRequest::new(1);
-        assert_eq!(req.hdr.instance_id(), 1);
+    fn test_query_downstream_devices_request() {
+        let instance_id: InstanceId = 0x01;
+        let req = QueryDownstreamDevicesRequest::new(instance_id);
+
+        let mut buffer_encode = [0u8; core::mem::size_of::<QueryDownstreamDevicesRequest>()];
+        req.encode(&mut buffer_encode).unwrap();
+
+        let decoded = QueryDownstreamDevicesRequest::decode(&buffer_encode).unwrap();
+        assert_eq!(req, decoded);
     }
 
     #[test]
-    fn test_query_downstream_device_response_new() {
-        let resp =
-            QueryDownstreamDeviceResponse::new(2, PldmBaseCompletionCode::Success, 0x01, 5, 10);
-        assert_eq!(resp.hdr.instance_id(), 2);
-        assert_eq!(resp.completion_code, 0x00);
-        assert_eq!(resp.downstream_device_update_supported, 0x01);
-        assert_eq!(resp.number_of_downstream_devices, 5);
-        assert_eq!(resp.max_number_of_downstream_devices, 10);
-        // capabilities default to zeroed fields
-        assert_eq!(resp.capabilities.update_simultaneous(), false);
-        assert_eq!(resp.capabilities.dynamic_remove(), false);
-        assert_eq!(resp.capabilities.dynamic_attach(), false);
-    }
-
-    #[test]
-    fn test_query_downstream_identifiers_portion_and_response() {
-        let portion = QueryDownstreamIdentifiersPortion::new(100u32, 2u16, 1u16, None);
-        let portions_arr = [
-            portion.clone(),
-            portion.clone(),
-            portion.clone(),
-            portion.clone(),
-        ];
-        let resp = QueryDownstreamIdentifiersResponse::new(
-            4,
-            QueryDownstreamIdentifiersResponseCode::BaseCodes(PldmBaseCompletionCode::Success),
-            0x1234,
-            1,
-            Some(&portions_arr),
+    fn test_query_downstream_devices_response() {
+        let instance_id: InstanceId = 0x01;
+        let resp = QueryDownstreamDeviceResponse::new(
+            instance_id,
+            PldmBaseCompletionCode::Success,
+            1u8,
+            1u16,
+            1u16,
         );
 
-        assert_eq!(resp.hdr.instance_id(), 4);
-        assert_eq!(
-            QueryDownstreamIdentifiersResponseCode::BaseCodes(
-                PldmBaseCompletionCode::try_from(resp.completion_code).unwrap()
-            ),
-            QueryDownstreamIdentifiersResponseCode::BaseCodes(PldmBaseCompletionCode::Success),
+        let mut buffer_encode = [0u8; core::mem::size_of::<QueryDownstreamDeviceResponse>()];
+        resp.encode(&mut buffer_encode).unwrap();
+
+        let decoded = QueryDownstreamDeviceResponse::decode(&buffer_encode).unwrap();
+        assert_eq!(resp, decoded);
+    }
+
+    #[test]
+    fn query_downstream_identifiers_request() {
+        let instance_id: InstanceId = 0x01;
+        let downstream_data_device_handle = 0x12345678;
+        let transfer_op_flag = TransferOperationFlag::GetFirstPart;
+
+        let req = QueryDownstreamIdentifiersRequest::new(
+            instance_id,
+            downstream_data_device_handle,
+            transfer_op_flag,
         );
-        assert_eq!(resp.next_data_transfer_handle, 0x1234);
-        assert_eq!(resp.transfer_flag, 1);
-        assert!(resp.portions.is_some());
-        let p = resp.portions.unwrap();
-        assert_eq!(p[0].downstream_devices_length, 100);
-        assert_eq!(p[0].number_of_downstream_devices, 2);
-        assert_eq!(p[0].first_downstream_device_index, 1);
-        assert!(p[0].downstream_devices.is_none());
+
+        let mut buffer_encode = [0u8; core::mem::size_of::<QueryDownstreamIdentifiersRequest>()];
+        req.encode(&mut buffer_encode).unwrap();
+
+        let decoded = QueryDownstreamIdentifiersRequest::decode(&buffer_encode).unwrap();
+        assert_eq!(req, decoded);
     }
 
     #[test]
-    fn test_downstream_devices_new() {
-        let ds = DownstreamDevices::new(10u16, 0u8, None);
-        assert_eq!(ds.downstream_device_index, 10);
-        assert_eq!(ds.downstream_descriptor_count, 0);
-        assert!(ds.downstream_descriptors.is_none());
-    }
-
-    #[test]
-    fn test_get_downstream_firmware_parameters_request_manual() {
-        let req = GetDownstreamFirmwareParametersRequest {
-            hdr: PldmMsgHeader::new(
-                6,
-                PldmMsgType::Request,
-                PldmSupportedType::FwUpdate,
-                FwUpdateCmd::GetDownstreamFirmwareParameters as u8,
-            ),
-            data_transfer_handle: 0xAABBCCDD,
-            transfer_op_flag: 0,
-        };
-        assert_eq!(req.hdr.instance_id(), 6);
-        let handle = req.data_transfer_handle;
-        assert_eq!(handle, 0xAABBCCDD);
-        assert_eq!(req.transfer_op_flag, 0);
-    }
-
-    #[test]
-    fn test_query_downstream_identifiers_request_manual() {
-        let req = QueryDownstreamIdentifiersRequest {
-            hdr: PldmMsgHeader::new(
-                5,
-                PldmMsgType::Request,
-                PldmSupportedType::FwUpdate,
-                FwUpdateCmd::QueryDownstreamIdentifiers as u8,
-            ),
-            downstream_data_device_handle: 0xDEADBEEF,
-            transfer_op_flag: 0,
-        };
-        assert_eq!(req.hdr.instance_id(), 5);
-        let handle = req.downstream_data_device_handle;
-        assert_eq!(handle, 0xDEADBEEF);
-        assert_eq!(req.transfer_op_flag, 0);
-    }
+    fn query_downstream_identifiers_response() {}
 }

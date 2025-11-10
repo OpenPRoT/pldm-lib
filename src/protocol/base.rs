@@ -289,6 +289,26 @@ macro_rules! pldm_completion_code {
                 }
             }
         }
+
+        impl TryFrom<u8> for $enum_name {
+            type Error = crate::error::PldmError;
+
+            fn try_from(code: u8) -> Result<Self, Self::Error> {
+                if let Ok(base_code) = PldmBaseCompletionCode::try_from(code) {
+                    return Ok($enum_name::BaseCodes(base_code));
+                }
+
+                match FwUpdateCompletionCode::try_from(code) {
+                    $(
+                        Ok(FwUpdateCompletionCode::$variant) => {
+                            Ok($enum_name::$variant)
+                        }
+                    )*
+                    Ok(_) => Err(crate::error::PldmError::InvalidCompletionCode),
+                    Err(e) => Err(e),
+                }
+        }
+    }
     };
 }
 
