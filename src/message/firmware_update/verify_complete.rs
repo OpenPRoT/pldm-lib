@@ -91,7 +91,7 @@ mod test {
     use crate::codec::PldmCodec;
 
     #[test]
-    fn test_verify_complete_request() {
+    fn test_verify_complete_request_codec() {
         let request =
             VerifyCompleteRequest::new(0x01, PldmMsgType::Request, VerifyResult::VerifySuccess);
         let mut buffer = [0u8; core::mem::size_of::<VerifyCompleteRequest>()];
@@ -101,7 +101,7 @@ mod test {
     }
 
     #[test]
-    fn test_verify_complete_response() {
+    fn test_verify_complete_response_codec() {
         let response = VerifyCompleteResponse::new(0x01, 0x00);
         let mut buffer = [0u8; core::mem::size_of::<VerifyCompleteResponse>()];
         response.encode(&mut buffer).unwrap();

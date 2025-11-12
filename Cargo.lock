@@ -9,10 +9,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2d7e60934ceec538daadb9d8432424ed043a904d8e0243f3c6446bce549a46ac"
 
 [[package]]
+name = "bytemuck"
+version = "1.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fbdf580320f38b612e485521afda1ee26d10cc9884efaaa750d383e13e3c5f4"
+
+[[package]]
 name = "pldm-lib"
 version = "0.1.0"
 dependencies = [
  "bitfield",
+ "bytemuck",
  "zerocopy",
 ]
 

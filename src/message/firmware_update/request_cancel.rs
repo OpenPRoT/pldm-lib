@@ -133,7 +133,7 @@ mod test {
     use crate::codec::PldmCodec;
 
     #[test]
-    fn test_cancel_update_request() {
+    fn test_cancel_update_request_codec() {
         let cancel_update_request = CancelUpdateRequest::new(0x01, PldmMsgType::Request);
         let mut buffer = [0u8; core::mem::size_of::<CancelUpdateRequest>()];
         cancel_update_request.encode(&mut buffer).unwrap();
@@ -142,7 +142,7 @@ mod test {
     }
 
     #[test]
-    fn test_cancel_update_response() {
+    fn test_cancel_update_response_codec() {
         let response = CancelUpdateResponse::new(
             0x01,
             0x00,

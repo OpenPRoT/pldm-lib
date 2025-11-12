@@ -101,7 +101,7 @@ mod test {
     use crate::codec::PldmCodec;
 
     #[test]
-    fn test_transfer_complete_request() {
+    fn test_transfer_complete_request_codec() {
         let request = TransferCompleteRequest::new(
             0x01,
             PldmMsgType::Request,
@@ -114,7 +114,7 @@ mod test {
     }
 
     #[test]
-    fn test_transfer_complete_response() {
+    fn test_transfer_complete_response_codec() {
         let response = TransferCompleteResponse::new(0x01, 0x00);
         let mut buffer = [0u8; core::mem::size_of::<TransferCompleteResponse>()];
         response.encode(&mut buffer).unwrap();

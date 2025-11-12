@@ -189,7 +189,7 @@ mod test {
     use crate::codec::PldmCodec;
 
     #[test]
-    fn test_get_status_request() {
+    fn test_get_status_request_codec() {
         let instance_id = 1;
         let msg_type = PldmMsgType::Request;
         let request = GetStatusRequest::new(instance_id, msg_type);
@@ -202,7 +202,7 @@ mod test {
     }
 
     #[test]
-    fn test_get_status_response() {
+    fn test_get_status_response_codec() {
         let response = GetStatusResponse::new(
             1,
             0,

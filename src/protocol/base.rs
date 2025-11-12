@@ -291,7 +291,7 @@ macro_rules! pldm_completion_code {
         }
 
         impl TryFrom<u8> for $enum_name {
-            type Error = crate::error::PldmError;
+            type Error = $crate::error::PldmError;
 
             fn try_from(code: u8) -> Result<Self, Self::Error> {
                 if let Ok(base_code) = PldmBaseCompletionCode::try_from(code) {
@@ -304,7 +304,7 @@ macro_rules! pldm_completion_code {
                             Ok($enum_name::$variant)
                         }
                     )*
-                    Ok(_) => Err(crate::error::PldmError::InvalidCompletionCode),
+                    Ok(_) => Err($crate::error::PldmError::InvalidCompletionCode),
                     Err(e) => Err(e),
                 }
         }

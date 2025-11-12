@@ -331,32 +331,71 @@ mod test {
     }
 
     #[test]
-    fn test_get_firmware_parameters_request() {
+    fn test_get_firmware_parameters_request_codec() {
         let request = GetFirmwareParametersRequest::new(0, PldmMsgType::Request);
         let mut buffer = [0u8; PLDM_MSG_HEADER_LEN];
         request.encode(&mut buffer).unwrap();
+
         let decoded_request = GetFirmwareParametersRequest::decode(&buffer).unwrap();
         assert_eq!(request, decoded_request);
+
+        // Test buffer too short error
+        let mut buffer = [0u8; PLDM_MSG_HEADER_LEN - 1];
+        assert_eq!(
+            request.encode(&mut buffer).unwrap_err(),
+            PldmCodecError::BufferTooShort
+        );
+
+        assert_eq!(
+            GetFirmwareParametersRequest::decode(&buffer).unwrap_err(),
+            PldmCodecError::BufferTooShort
+        );
     }
 
     #[test]
-    fn test_get_firmware_parameters() {
+    fn test_get_firmware_parameters_codec() {
         let firmware_parameters = construct_firmware_params();
         let mut buffer = [0u8; 1024];
         let size = firmware_parameters.encode(&mut buffer).unwrap();
         assert_eq!(size, firmware_parameters.codec_size_in_bytes());
+
         let decoded_firmware_parameters = FirmwareParameters::decode(&buffer[..size]).unwrap();
         assert_eq!(firmware_parameters, decoded_firmware_parameters);
+
+        // Test buffer too short error
+        let mut short_buffer = [0u8; 1];
+        assert_eq!(
+            firmware_parameters.encode(&mut short_buffer).unwrap_err(),
+            PldmCodecError::BufferTooShort
+        );
+
+        assert_eq!(
+            FirmwareParameters::decode(&short_buffer).unwrap_err(),
+            PldmCodecError::BufferTooShort
+        );
     }
 
     #[test]
-    fn test_get_firmware_parameters_response() {
+    fn test_get_firmware_parameters_response_codec() {
         let firmware_parameters = construct_firmware_params();
         let response = GetFirmwareParametersResponse::new(0, 0, &firmware_parameters);
         let mut buffer = [0u8; 1024];
         let size = response.encode(&mut buffer).unwrap();
         assert_eq!(size, response.codec_size_in_bytes());
+
         let decoded_response = GetFirmwareParametersResponse::decode(&buffer[..size]).unwrap();
         assert_eq!(response, decoded_response);
+
+        // Test buffer too short error
+        let mut short_buffer = [0u8; 1];
+        assert_eq!(
+            response.encode(&mut short_buffer).unwrap_err(),
+            PldmCodecError::BufferTooShort
+        );
+
+        assert_eq!(
+            GetFirmwareParametersResponse::decode(&short_buffer).unwrap_err(),
+            PldmCodecError::BufferTooShort
+        );
     }
 }

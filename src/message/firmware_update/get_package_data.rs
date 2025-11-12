@@ -283,6 +283,72 @@ impl<'a> GetDeviceMetaDataResponse<'a> {
     }
 }
 
+impl<'a> PldmCodecWithLifetime<'a> for GetDeviceMetaDataResponse<'a> {
+    fn encode(&self, buffer: &mut [u8]) -> Result<usize, PldmCodecError> {
+        let size = core::mem::size_of::<Self>() - core::mem::size_of::<&'a [u8]>();
+        if buffer.len() < size + self.portion_of_device_metadata.len() {
+            return Err(PldmCodecError::BufferTooShort);
+        }
+
+        let mut offset = 0;
+        self.hdr
+            .write_to_prefix(&mut buffer[offset..])
+            .map_err(|_| PldmCodecError::BufferTooShort)?;
+        offset += PLDM_MSG_HEADER_LEN;
+
+        buffer[offset] = self.completion_code;
+        offset += 1;
+
+        buffer[offset..offset + size_of::<u32>()]
+            .copy_from_slice(&self.next_data_transfer_handle.to_le_bytes());
+        offset += size_of::<u32>();
+
+        buffer[offset] = self.transfer_flag;
+        offset += size_of::<u8>();
+
+        buffer[offset..offset + self.portion_of_device_metadata.len()]
+            .copy_from_slice(self.portion_of_device_metadata);
+
+        Ok(size)
+    }
+
+    fn decode(buffer: &'a [u8]) -> Result<Self, PldmCodecError> {
+        let size = core::mem::size_of::<Self>() - core::mem::size_of::<&'a [u8]>();
+        if buffer.len() < size {
+            return Err(PldmCodecError::BufferTooShort);
+        }
+
+        let mut offset = 0;
+        let hdr = PldmMsgHeader::read_from_prefix(&buffer[offset..])
+            .map_err(|_| PldmCodecError::BufferTooShort)?
+            .0;
+        offset += PLDM_MSG_HEADER_LEN;
+
+        let completion_code = buffer[offset];
+        offset += size_of::<u8>();
+
+        let next_data_transfer_handle = u32::from_le_bytes(
+            buffer[offset..offset + 4]
+                .try_into()
+                .map_err(|_| PldmCodecError::BufferTooShort)?,
+        );
+        offset += size_of::<u32>();
+
+        let transfer_flag = buffer[offset];
+        offset += size_of::<u8>();
+
+        let portion_of_device_metadata = &buffer[offset..];
+
+        Ok(Self {
+            hdr,
+            completion_code,
+            next_data_transfer_handle,
+            transfer_flag,
+            portion_of_device_metadata,
+        })
+    }
+}
+
 /// The FD sends this command to transfer the data that was originally obtained by the UA through the
 /// [GetDeviceMetaData] command. This command shall only be used if the FD indicated in the
 /// [RequestUpdate] response that it had device metadata that needed to be obtained by the UA. The FD can
@@ -438,7 +504,7 @@ mod tests {
     use crate::codec::PldmCodec;
 
     #[test]
-    fn test_get_package_data_request() {
+    fn test_get_package_data_request_codec() {
         let instance_id: InstanceId = 0x01;
         let data_transfer_handle: u32 = 0x12345678;
         let transfer_operation_flag = TransferOperationFlag::GetFirstPart;
@@ -454,7 +520,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_package_data_response() {
+    fn test_get_package_data_response_codec() {
         const PORTION_LEN: usize = 10;
 
         let instance_id: InstanceId = 0x01;
@@ -475,15 +541,13 @@ mod tests {
             - core::mem::size_of::<usize>()
             + PORTION_LEN];
 
-        dbg!(&buffer_fitted.len());
-
         resp.encode(&mut buffer_fitted).unwrap();
         let decoded = GetPackageDataResponse::decode(&buffer_fitted).unwrap();
         assert_eq!(resp, decoded);
     }
 
     #[test]
-    fn test_get_device_metadata_request() {
+    fn test_get_metadata_request_codec() {
         let instance_id: InstanceId = 0x01;
         let data_transfer_handle = 0x12345678;
         let req = GetMetaDataRequest::new(
@@ -500,7 +564,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_device_metadata_response() {
+    fn test_get_meta_data_response_codec() {
         let instance_id: InstanceId = 0x01;
         let data_transfer_handle = 0x12345678;
         let payload = [11u8; 20];
@@ -513,10 +577,52 @@ mod tests {
             &payload,
         );
 
-        let mut buffer = [0u8; 9 + 20];
+        let mut buffer =
+            [0u8; core::mem::size_of::<GetMetaDataResponse>() - core::mem::size_of::<&[u8]>() + 20];
         resp.encode(&mut buffer).unwrap();
 
         let decoded = GetMetaDataResponse::decode(&mut buffer).unwrap();
+        assert_eq!(resp, decoded);
+    }
+
+    #[test]
+    fn test_get_device_meta_data_request_codec() {
+        let instance_id: InstanceId = 0x01;
+        let data_transfer_handle = 0x12345678;
+        let req = GetDeviceMetaDataRequest::new(
+            instance_id,
+            data_transfer_handle,
+            TransferOperationFlag::GetFirstPart,
+        );
+
+        let mut buffer = [0u8; core::mem::size_of::<GetDeviceMetaDataRequest>()];
+        req.encode(&mut buffer).unwrap();
+
+        let decoded = GetDeviceMetaDataRequest::decode(&buffer).unwrap();
+        assert_eq!(req, decoded);
+    }
+
+    #[test]
+    fn test_get_device_meta_data_response_codec() {
+        let instance_id: InstanceId = 0x01;
+        let data_transfer_handle = 0x12345678;
+        const TEST_PAYLOAD_LEN: usize = 20;
+        let payload = [11u8; TEST_PAYLOAD_LEN];
+
+        let resp = GetDeviceMetaDataResponse::new(
+            instance_id,
+            GetDeviceMetaDataCodes::BaseCodes(PldmBaseCompletionCode::Success),
+            data_transfer_handle,
+            TransferOperationFlag::GetFirstPart,
+            &payload,
+        );
+
+        let mut buffer = [0u8; core::mem::size_of::<GetDeviceMetaDataResponse>()
+            - core::mem::size_of::<&[u8]>()
+            + TEST_PAYLOAD_LEN];
+        resp.encode(&mut buffer).unwrap();
+
+        let decoded = GetDeviceMetaDataResponse::decode(&mut buffer).unwrap();
         assert_eq!(resp, decoded);
     }
 }

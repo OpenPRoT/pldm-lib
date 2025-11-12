@@ -235,7 +235,7 @@ mod tests {
     use crate::protocol::firmware_update::PldmFirmwareString;
 
     #[test]
-    fn test_request_update_request() {
+    fn test_request_update_request_codec() {
         let request = RequestUpdateRequest::new(
             0,
             PldmMsgType::Request,
@@ -255,7 +255,7 @@ mod tests {
     }
 
     #[test]
-    fn test_request_update_response() {
+    fn test_request_update_response_codec() {
         let response = RequestUpdateResponse::new(1, 0, 128, 0x02, Some(2048));
 
         let mut buffer = [0u8; 512];

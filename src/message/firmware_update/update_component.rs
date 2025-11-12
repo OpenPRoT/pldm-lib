@@ -299,7 +299,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_update_component_request() {
+    fn test_update_component_request_codec() {
         let request = UpdateComponentRequest::new(
             0,
             PldmMsgType::Request,
@@ -319,7 +319,7 @@ mod test {
     }
 
     #[test]
-    fn test_update_component_response() {
+    fn test_update_component_response_codec() {
         let response = UpdateComponentResponse::new(
             0,
             0x00,

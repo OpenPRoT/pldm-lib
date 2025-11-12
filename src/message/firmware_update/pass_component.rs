@@ -154,7 +154,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_pass_component_table_request() {
+    fn test_pass_component_table_request_codec() {
         let request = PassComponentTableRequest::new(
             1,
             PldmMsgType::Request,
@@ -173,7 +173,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pass_component_table_response() {
+    fn test_pass_component_table_response_codec() {
         let response = PassComponentTableResponse::new(
             0,
             0,
