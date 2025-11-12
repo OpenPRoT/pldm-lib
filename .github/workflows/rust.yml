@@ -1,0 +1,42 @@
+name: Rust
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+     - uses: actions/checkout@v4
+     - name: Install Rust (stable) with components
+       uses: dtolnay/rust-toolchain@stable
+       with:
+        components: clippy, rustfmt
+     - name: rustfmt check
+       run: cargo fmt --all -- --check
+     - name: clippy (deny warnings)
+       run: |
+         cargo clippy --all-targets --all-features -- -D warnings
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust (stable) with components
+      uses: dtolnay/rust-toolchain@stable
+    - name: Cargo Build
+      run: cargo build --verbose
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust (stable) with components
+      uses: dtolnay/rust-toolchain@stable
+    - name: Run tests
+      run: cargo test --all-features --verbose
