@@ -3,8 +3,8 @@
 use crate::codec::{PldmCodec, PldmCodecError, PldmCodecWithLifetime};
 use crate::error::PldmError;
 use crate::protocol::base::{
-    InstanceId, PldmBaseCompletionCode, PldmMsgHeader, PldmMsgType, PldmSupportedType,
-    TransferOperationFlag, PLDM_MSG_HEADER_LEN,
+    InstanceId, PLDM_MSG_HEADER_LEN, PldmBaseCompletionCode, PldmMsgHeader, PldmMsgType,
+    PldmSupportedType, TransferOperationFlag,
 };
 
 use crate::pldm_completion_code;
@@ -1435,7 +1435,7 @@ mod tests {
             descriptor_length: 0x02,
             descriptor_data: [0u8; 64],
         };
-        let descriptors: [Descriptor; 3] = [descriptor.clone(), descriptor.clone(), descriptor];
+        let descriptors: [Descriptor; 3] = [descriptor, descriptor, descriptor];
 
         const DESC_LEN: usize = size_of::<Descriptor>();
         let mut descriptor_bytes_max: [u8; DESC_LEN * 3] = [0u8; DESC_LEN * 3];
@@ -1475,10 +1475,10 @@ mod tests {
             descriptor_data: [0u8; 64],
         };
 
-        let mut dsc_1 = dsc_0.clone();
+        let mut dsc_1 = dsc_0;
         dsc_1.descriptor_data[0..16].clone_from_slice(&[1u8; 16]);
 
-        let mut dsc_2 = dsc_0.clone();
+        let mut dsc_2 = dsc_0;
         dsc_2.descriptor_data[0..16].clone_from_slice(&[2u8; 16]);
 
         const LEN: usize = size_of::<PortionHeader>()
@@ -1488,14 +1488,14 @@ mod tests {
         let mut offset = 0;
         let mut portion: [u8; LEN] = [0u8; LEN];
 
-        portion[0..offset + size_of::<PortionHeader>()].copy_from_slice(&ph.as_bytes());
+        portion[0..offset + size_of::<PortionHeader>()].copy_from_slice(ph.as_bytes());
         offset += size_of::<PortionHeader>();
 
         portion[offset..offset + size_of::<DownstreamDevicesHeader>()]
-            .copy_from_slice(&dsdh.as_bytes());
+            .copy_from_slice(dsdh.as_bytes());
         offset += size_of::<DownstreamDevicesHeader>();
 
-        for desc in [dsc_0.clone(), dsc_1.clone(), dsc_2.clone()].iter() {
+        for desc in [dsc_0, dsc_1, dsc_2].iter() {
             let size = &desc.encode(&mut portion[offset..]).unwrap();
             offset += size;
         }

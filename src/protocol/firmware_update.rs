@@ -1034,7 +1034,7 @@ mod test {
     #[test]
     fn test_pldm_firmware_string_codec() {
         let test_str = "test";
-        let fw_string = PldmFirmwareString::new("ASCII", &test_str).unwrap();
+        let fw_string = PldmFirmwareString::new("ASCII", test_str).unwrap();
         assert_eq!(fw_string.str_type, VersionStringType::Ascii as u8);
         assert_eq!(fw_string.str_len, test_str.len() as u8);
         assert_eq!(&fw_string.str_data[..fw_string.str_len as usize], b"test");
@@ -1058,7 +1058,7 @@ mod test {
     #[should_panic]
     fn test_pldm_firmware_string_codec_invalid_size() {
         let test_str = "test";
-        let fw_string = PldmFirmwareString::new("ASCII", &test_str).unwrap();
+        let fw_string = PldmFirmwareString::new("ASCII", test_str).unwrap();
         assert_eq!(fw_string.str_type, VersionStringType::Ascii as u8);
         assert_eq!(fw_string.str_len, test_str.len() as u8);
         assert_eq!(&fw_string.str_data[..fw_string.str_len as usize], b"test");

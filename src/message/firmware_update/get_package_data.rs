@@ -1,8 +1,8 @@
 // Licensed under the Apache-2.0 license
 
 use crate::protocol::base::{
-    InstanceId, PldmBaseCompletionCode, PldmMsgHeader, PldmMsgType, PldmSupportedType,
-    TransferOperationFlag, PLDM_MSG_HEADER_LEN,
+    InstanceId, PLDM_MSG_HEADER_LEN, PldmBaseCompletionCode, PldmMsgHeader, PldmMsgType,
+    PldmSupportedType, TransferOperationFlag,
 };
 
 use crate::pldm_completion_code;
@@ -575,7 +575,7 @@ mod tests {
             [0u8; core::mem::size_of::<GetMetaDataResponse>() - core::mem::size_of::<&[u8]>() + 20];
         resp.encode(&mut buffer).unwrap();
 
-        let decoded = GetMetaDataResponse::decode(&mut buffer).unwrap();
+        let decoded = GetMetaDataResponse::decode(&buffer).unwrap();
         assert_eq!(resp, decoded);
     }
 
@@ -616,7 +616,7 @@ mod tests {
             + TEST_PAYLOAD_LEN];
         resp.encode(&mut buffer).unwrap();
 
-        let decoded = GetDeviceMetaDataResponse::decode(&mut buffer).unwrap();
+        let decoded = GetDeviceMetaDataResponse::decode(&buffer).unwrap();
         assert_eq!(resp, decoded);
     }
 }

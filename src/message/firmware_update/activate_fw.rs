@@ -1,7 +1,7 @@
 // Licensed under the Apache-2.0 license
 
 use crate::protocol::base::{
-    InstanceId, PldmMsgHeader, PldmMsgType, PldmSupportedType, PLDM_MSG_HEADER_LEN,
+    InstanceId, PLDM_MSG_HEADER_LEN, PldmMsgHeader, PldmMsgType, PldmSupportedType,
 };
 use crate::protocol::firmware_update::FwUpdateCmd;
 use zerocopy::{FromBytes, Immutable, IntoBytes};

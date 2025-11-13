@@ -2,11 +2,11 @@
 
 use crate::codec::{PldmCodec, PldmCodecError};
 use crate::protocol::base::{
-    InstanceId, PldmMsgHeader, PldmMsgType, PldmSupportedType, PLDM_MSG_HEADER_LEN,
+    InstanceId, PLDM_MSG_HEADER_LEN, PldmMsgHeader, PldmMsgType, PldmSupportedType,
 };
 use crate::protocol::firmware_update::{
-    ComponentParameterEntry, FirmwareDeviceCapability, FwUpdateCmd, PldmFirmwareString,
-    MAX_COMPONENT_COUNT, PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN,
+    ComponentParameterEntry, FirmwareDeviceCapability, FwUpdateCmd, MAX_COMPONENT_COUNT,
+    PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN, PldmFirmwareString,
 };
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
