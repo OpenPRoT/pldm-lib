@@ -18,6 +18,8 @@ jobs:
        uses: dtolnay/rust-toolchain@stable
        with:
         components: clippy, rustfmt
+     - name: Cache cargo registry and build
+       uses: Swatinem/rust-cache@v2
      - name: rustfmt check
        run: cargo fmt --all -- --check
      - name: clippy (deny warnings)
@@ -30,6 +32,8 @@ jobs:
     - uses: actions/checkout@v4
     - name: Install Rust (stable) with components
       uses: dtolnay/rust-toolchain@stable
+    - name: Cache cargo registry and build
+      uses: Swatinem/rust-cache@v2
     - name: Cargo Build
       run: cargo build --verbose
   test:
@@ -38,5 +42,7 @@ jobs:
     - uses: actions/checkout@v4
     - name: Install Rust (stable) with components
       uses: dtolnay/rust-toolchain@stable
+    - name: Cache cargo registry and build
+      uses: Swatinem/rust-cache@v2
     - name: Run tests
       run: cargo test --all-features --verbose
