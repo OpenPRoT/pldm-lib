@@ -1,6 +1,5 @@
 // Licensed under the Apache-2.0 license
-
-use crate::codec::{PldmCodec, PldmCodecError, PldmCodecWithLifetime};
+use crate::codec::{PldmCodecError, PldmCodecWithLifetime};
 use crate::protocol::base::{
     InstanceId, PldmMsgHeader, PldmMsgType, PldmSupportedType, PLDM_MSG_HEADER_LEN,
 };
@@ -106,15 +105,19 @@ impl<'a> PldmCodecWithLifetime<'a> for RequestFirmwareDataResponse<'a> {
             return Err(PldmCodecError::BufferTooShort);
         }
 
-        let (fixed, data) =
+        let (fixed, _) =
             RequestFirmwareDataResponseFixed::read_from_prefix(&buffer[..size]).unwrap();
-        Ok(RequestFirmwareDataResponse { fixed, data })
+        Ok(RequestFirmwareDataResponse {
+            fixed,
+            data: &buffer[size..],
+        })
     }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::codec::PldmCodec;
 
     #[test]
     fn test_request_firmware_data_request_codec() {

@@ -257,8 +257,7 @@ impl PldmCodec for GetFirmwareParametersResponse {
         offset += core::mem::size_of::<u8>();
 
         let bytes = self.parms.encode(&mut buffer[offset..])?;
-        offset += bytes;
-        Ok(offset)
+        Ok(offset + bytes)
     }
 
     fn decode(buffer: &[u8]) -> Result<Self, PldmCodecError> {

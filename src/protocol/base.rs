@@ -259,7 +259,7 @@ impl PldmFailureResponse {
 /// Macro to define PLDM completion code enum with base codes and custom codes.
 /// By default, the entire [PldmBaseCompletionCode] is included as a
 /// variant named `BaseCodes`. The additional custom completion codes can be
-/// specified as variants, e.g. [FwUpdateCompletionCode].
+/// specified as variants of [FwUpdateCompletionCode].
 ///
 /// This macro is useful for the completion codes for the command responses, to ensure
 /// type safety while still allowing the use of base completion codes and an

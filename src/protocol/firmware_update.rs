@@ -333,65 +333,6 @@ impl Descriptor {
     }
 }
 
-// impl PldmCodec for Descriptor {
-//     fn encode(&self, buffer: &mut [u8]) -> Result<usize, PldmCodecError> {
-//         if buffer.len() < self.codec_size_in_bytes() {
-//             return Err(PldmCodecError::BufferTooShort);
-//         }
-//         let mut offset = 0;
-
-//         self.descriptor_type
-//             .write_to(&mut buffer[offset..offset + core::mem::size_of::<u16>()])
-//             .unwrap();
-//         offset += core::mem::size_of::<u16>();
-
-//         self.descriptor_length
-//             .write_to(&mut buffer[offset..offset + core::mem::size_of::<u16>()])
-//             .unwrap();
-//         offset += core::mem::size_of::<u16>();
-
-//         self.descriptor_data[..self.descriptor_length as usize]
-//             .write_to(&mut buffer[offset..offset + self.descriptor_length as usize])
-//             .unwrap();
-//         offset += self.descriptor_length as usize;
-
-//         Ok(offset)
-//     }
-
-//     fn decode(buffer: &[u8]) -> Result<Self, PldmCodecError> {
-//         let mut offset = 0;
-
-//         let descriptor_type = u16::read_from_bytes(
-//             buffer
-//                 .get(offset..offset + core::mem::size_of::<u16>())
-//                 .ok_or(PldmCodecError::BufferTooShort)?,
-//         )
-//         .unwrap();
-//         offset += core::mem::size_of::<u16>();
-
-//         let descriptor_length = u16::read_from_bytes(
-//             buffer
-//                 .get(offset..offset + core::mem::size_of::<u16>())
-//                 .ok_or(PldmCodecError::BufferTooShort)?,
-//         )
-//         .unwrap();
-//         offset += core::mem::size_of::<u16>();
-
-//         let mut descriptor_data = [0u8; DESCRIPTOR_DATA_MAX_LEN];
-//         descriptor_data[..descriptor_length as usize].copy_from_slice(
-//             buffer
-//                 .get(offset..offset + descriptor_length as usize)
-//                 .ok_or(PldmCodecError::BufferTooShort)?,
-//         );
-
-//         Ok(Descriptor {
-//             descriptor_type,
-//             descriptor_length,
-//             descriptor_data,
-//         })
-//     }
-// }
-
 bitfield! {
     /// FDPCapabilitiesDuringUpdate
     ///
@@ -541,9 +482,8 @@ impl PldmCodec for PldmFirmwareString {
         self.str_data[..self.str_len as usize]
             .write_to(&mut buffer[offset..offset + self.str_len as usize])
             .unwrap();
-        offset += self.str_len as usize;
 
-        Ok(offset)
+        Ok(offset + self.str_len as usize)
     }
 
     fn decode(buffer: &[u8]) -> Result<Self, PldmCodecError> {

@@ -17,9 +17,9 @@ pub const GET_PACKAGE_DATA_PORTION_SIZE: usize = 1024;
 #[repr(C, packed)]
 /// The FD sends this command to transfer optional data that shall be received prior to transferring
 /// components during the firmware update process. This command is only used if the firmware update
-/// package contained content within the [FirmwareDevicePackageData] field, the UA provided the length of
+/// package contained content within the FirmwareDevicePackageData field, the UA provided the length of
 /// the package data in the RequestUpdate command, and the FD indicated that it would use this command
-/// in the [FDWillSendGetPackageDataCommand] field.
+/// in the FDWillSendGetPackageDataCommand field.
 pub struct GetPackageDataRequest {
     pub hdr: PldmMsgHeader<[u8; PLDM_MSG_HEADER_LEN]>,
     pub data_transfer_handle: u32,
@@ -120,19 +120,16 @@ impl PldmCodec for GetPackageDataResponse {
             return Err(PldmCodecError::BufferTooShort);
         }
 
-        dbg!(core::mem::size_of::<GetPackageDataResponse>());
-
         let mut offset = 0;
-        buffer[offset..offset + std::mem::size_of_val(&self.hdr.0)].copy_from_slice(&self.hdr.0);
-        offset += std::mem::size_of_val(&self.hdr.0);
-        dbg!(offset);
+        buffer[offset..offset + size_of_val(&self.hdr.0)].copy_from_slice(&self.hdr.0);
+        offset += size_of_val(&self.hdr.0);
 
         buffer[offset] = self.completion_code;
         offset += 1;
 
-        buffer[offset..offset + std::mem::size_of_val(&self.next_data_transfer_handle)]
+        buffer[offset..offset + size_of_val(&self.next_data_transfer_handle)]
             .copy_from_slice(self.next_data_transfer_handle.as_bytes());
-        offset += std::mem::size_of_val(&self.next_data_transfer_handle);
+        offset += size_of_val(&self.next_data_transfer_handle);
 
         buffer[offset] = self.transfer_flag;
         offset += 1;
@@ -141,11 +138,7 @@ impl PldmCodec for GetPackageDataResponse {
             self.portion_of_package_data[0..self.portion_of_package_data_len].as_bytes(),
         );
 
-        offset += self.portion_of_package_data_len;
-        dbg!(&buffer, &buffer.len(), &self.portion_of_package_data_len);
-        dbg!(self.portion_of_package_data_len);
-
-        Ok(offset)
+        Ok(offset + self.portion_of_package_data_len)
     }
 
     fn decode(buffer: &[u8]) -> Result<Self, crate::codec::PldmCodecError> {
@@ -309,7 +302,7 @@ impl<'a> PldmCodecWithLifetime<'a> for GetDeviceMetaDataResponse<'a> {
         buffer[offset..offset + self.portion_of_device_metadata.len()]
             .copy_from_slice(self.portion_of_device_metadata);
 
-        Ok(size)
+        Ok(offset + self.portion_of_device_metadata.len())
     }
 
     fn decode(buffer: &'a [u8]) -> Result<Self, PldmCodecError> {
@@ -350,8 +343,8 @@ impl<'a> PldmCodecWithLifetime<'a> for GetDeviceMetaDataResponse<'a> {
 }
 
 /// The FD sends this command to transfer the data that was originally obtained by the UA through the
-/// [GetDeviceMetaData] command. This command shall only be used if the FD indicated in the
-/// [RequestUpdate] response that it had device metadata that needed to be obtained by the UA. The FD can
+/// [GetDeviceMetaDataRequest] command. This command shall only be used if the FD indicated in the
+/// RequestUpdate response that it had device metadata that needed to be obtained by the UA. The FD can
 /// send this command when it is in any state, except the IDLE and LEARN COMPONENTS state.
 #[derive(Debug, Clone, FromBytes, IntoBytes, Immutable, PartialEq)]
 #[repr(C, packed)]
@@ -403,9 +396,10 @@ pub struct GetMetaDataResponse<'a> {
 
     /// The UA should select the amount of data to return such that the byte length for this field, except
     /// when TransferFlag = End or StartAndEnd, is equal to or between the values of the firmware update
-    /// baseline transfer size and MaximumTransferSize from the [RequestUpdate] or
-    /// [RequestDownstreamDeviceUpdate] command. When TransferFlag = End or StartAndEnd, the
-    /// variable size of this field can also be less than the firmware update baseline transfer size.
+    /// baseline transfer size and MaximumTransferSize from the RequestUpdate or
+    /// [crate::message::firmware_update::query_downstream::RequestDownstreamDeviceUpdateRequest] command.
+    ///  When TransferFlag = End or StartAndEnd, the variable size of this field can also be less than
+    /// the firmware update baseline transfer size.
     pub portion_of_device_metadata: &'a [u8],
 }
 
@@ -457,7 +451,7 @@ impl<'a> PldmCodecWithLifetime<'a> for GetMetaDataResponse<'a> {
         buffer[offset..offset + self.portion_of_device_metadata.len()]
             .copy_from_slice(self.portion_of_device_metadata);
 
-        Ok(size)
+        Ok(offset + self.portion_of_device_metadata.len())
     }
 
     fn decode(buffer: &'a [u8]) -> Result<Self, PldmCodecError> {

@@ -184,7 +184,7 @@ struct PortionHeader {
     pub number_of_downstream_devices: u16,
 }
 
-#[derive(Debug, TryFromBytes, IntoBytes, Immutable, KnownLayout)]
+#[derive(Debug, TryFromBytes, IntoBytes, Immutable, KnownLayout, PartialEq, Eq)]
 #[repr(C, packed)]
 struct DownstreamDevicesHeader {
     pub downstream_devices_index: u16,
@@ -282,12 +282,13 @@ impl<'a> Iterator for QueryDownstreamIdentifiersResponse<'a> {
 
 impl<'a> PldmCodecWithLifetime<'a> for QueryDownstreamIdentifiersResponse<'a> {
     fn encode(&self, buffer: &mut [u8]) -> Result<usize, crate::codec::PldmCodecError> {
-        let max_size = size_of::<PldmMsgHeader<[u8; PLDM_MSG_HEADER_LEN]>>()
+        let size = size_of::<PldmMsgHeader<[u8; PLDM_MSG_HEADER_LEN]>>()
             + size_of::<u8>()
             + size_of::<u32>()
             + size_of::<u8>()
             + self.portion.len();
-        if buffer.len() < max_size {
+
+        if buffer.len() < size {
             return Err(crate::codec::PldmCodecError::BufferTooShort);
         }
 
@@ -307,42 +308,41 @@ impl<'a> PldmCodecWithLifetime<'a> for QueryDownstreamIdentifiersResponse<'a> {
 
         offset += size_of::<u8>();
         buffer[offset..offset + self.portion.len()].copy_from_slice(self.portion);
-        offset += self.portion.len();
 
-        Ok(offset)
+        Ok(offset + self.portion.len())
     }
 
-    fn decode(_buffer: &'a [u8]) -> Result<Self, crate::codec::PldmCodecError> {
+    fn decode(buffer: &'a [u8]) -> Result<Self, crate::codec::PldmCodecError> {
         let min_size = size_of::<PldmMsgHeader<[u8; PLDM_MSG_HEADER_LEN]>>()
             + size_of::<u8>()
             + size_of::<u32>()
             + size_of::<u8>();
 
-        if _buffer.len() < min_size {
+        if buffer.len() < min_size {
             return Err(crate::codec::PldmCodecError::BufferTooShort);
         }
 
         let mut offset = 0;
         let hdr = PldmMsgHeader::<[u8; PLDM_MSG_HEADER_LEN]>::read_from_bytes(
-            &_buffer[offset..offset + PLDM_MSG_HEADER_LEN],
+            &buffer[offset..offset + PLDM_MSG_HEADER_LEN],
         )
         .map_err(|_| crate::codec::PldmCodecError::BufferTooShort)?;
         offset += PLDM_MSG_HEADER_LEN;
 
-        let completion_code = _buffer[offset];
+        let completion_code = buffer[offset];
         offset += size_of::<u8>();
 
         let next_data_transfer_handle = u32::from_le_bytes(
-            _buffer[offset..offset + size_of::<u32>()]
+            buffer[offset..offset + size_of::<u32>()]
                 .try_into()
                 .map_err(|_| crate::codec::PldmCodecError::BufferTooShort)?,
         );
         offset += size_of::<u32>();
 
-        let transfer_flag = _buffer[offset];
+        let transfer_flag = buffer[offset];
         offset += size_of::<u8>();
 
-        let portion = &_buffer[offset..];
+        let portion = &buffer[offset..];
 
         Ok(QueryDownstreamIdentifiersResponse {
             hdr,
@@ -438,7 +438,6 @@ impl Iterator for DownstreamDevice<'_> {
         self._iter_offset += descriptor_size;
         self._iter_dev_count += 1;
 
-        // println!("{descriptor:?}");
         Some(descriptor)
     }
 }
@@ -885,18 +884,22 @@ impl PldmCodec for DownstreamDeviceParameterTable {
         let capabilities_during_update = CapabilitiesDuringUpdate::decode(&buffer[offset..])?;
         offset += size_of::<CapabilitiesDuringUpdate>();
 
-        let mut active_component_version_string = PldmFirmwareString::default();
-        active_component_version_string.str_type = active_component_version_string_type;
-        active_component_version_string.str_len = active_component_version_string_length;
+        let mut active_component_version_string = PldmFirmwareString {
+            str_type: active_component_version_string_type,
+            str_len: active_component_version_string_length,
+            str_data: [0u8; 32],
+        };
         active_component_version_string.str_data[..active_component_version_string_length as usize]
             .copy_from_slice(
                 &buffer[offset..offset + active_component_version_string_length as usize],
             );
         offset += active_component_version_string_length as usize;
 
-        let mut pending_component_version_string = PldmFirmwareString::default();
-        pending_component_version_string.str_type = pending_component_version_string_type;
-        pending_component_version_string.str_len = pending_component_version_string_length;
+        let mut pending_component_version_string = PldmFirmwareString {
+            str_type: pending_component_version_string_type,
+            str_len: pending_component_version_string_length,
+            str_data: [0u8; 32],
+        };
         pending_component_version_string.str_data
             [..pending_component_version_string_length as usize]
             .copy_from_slice(
@@ -948,9 +951,6 @@ impl PldmCodec for GetDownstreamFirmwareParametersResponse {
             + size_of::<u8>()
             + self.portion.size();
 
-        println!("DownstreamDeviceParameterTable encode size: {}", size);
-        println!("Buffer length: {}", buffer.len());
-
         if buffer.len() < size {
             return Err(crate::codec::PldmCodecError::BufferTooShort);
         }
@@ -972,9 +972,8 @@ impl PldmCodec for GetDownstreamFirmwareParametersResponse {
         offset += size_of::<u8>();
 
         let bytes_written = self.portion.encode(&mut buffer[offset..])?;
-        offset += bytes_written;
 
-        Ok(offset)
+        Ok(offset + bytes_written)
     }
 
     fn decode(buffer: &[u8]) -> Result<Self, crate::codec::PldmCodecError> {
@@ -1257,8 +1256,6 @@ mod tests {
                 + size_of::<ComponentActivationMethods>()
                 + size_of::<CapabilitiesDuringUpdate>();
 
-        dbg!(STR_DATA_OFFSET);
-
         let mut buffer = [0u8; STR_DATA_OFFSET + 4 + 4];
         let bytes_written = table.encode(&mut buffer).unwrap();
 
@@ -1292,8 +1289,6 @@ mod tests {
         )
         .unwrap();
 
-        dbg!(size_of_val(&downstream_device_parameter_table));
-
         let portion = GetDownstreamFirmwareParametersPortion {
             get_downstream_firmware_parameters_capability: FirmwareDeviceCapability(0u32),
             downstream_device_count: 1,
@@ -1310,7 +1305,6 @@ mod tests {
 
     #[test]
     fn test_get_downstream_firmware_parameters_response_codec() {
-        // todo!();
         let instance_id: InstanceId = 0x01;
         let downstream_device_index = DownstreamDeviceIndex::try_from(1).unwrap();
         let cap: FirmwareDeviceCapability = FirmwareDeviceCapability(0u32);
@@ -1469,11 +1463,14 @@ mod tests {
         let mut qdir_iter = qdir.next();
         let mut dsd_iter = qdir_iter.as_mut().unwrap().next();
         assert!(dsd_iter.is_some());
+        assert_eq!(dsc_0, dsd_iter.unwrap());
 
         dsd_iter = qdir_iter.as_mut().unwrap().next();
+        assert!(dsd_iter.is_some());
         assert_eq!(dsc_1, dsd_iter.unwrap());
 
         dsd_iter = qdir_iter.as_mut().unwrap().next();
+        assert!(dsd_iter.is_some());
         assert_eq!(dsc_2, dsd_iter.unwrap());
 
         qdir_iter = qdir.next();
