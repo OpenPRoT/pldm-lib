@@ -5,7 +5,7 @@ use crate::error::PldmError;
 use bitfield::bitfield;
 use core::convert::TryFrom;
 use core::fmt;
-use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
+use zerocopy::{FromBytes, Immutable, IntoBytes};
 
 pub const PLDM_FWUP_COMPONENT_RELEASE_DATA_LEN: usize = 8;
 pub const PLDM_FWUP_BASELINE_TRANSFER_SIZE: usize = 32;
@@ -285,7 +285,7 @@ pub fn get_descriptor_length(descriptor_type: DescriptorType) -> usize {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, FromBytes, IntoBytes, Immutable, KnownLayout)]
+#[derive(Debug, Copy, Clone, PartialEq, FromBytes)]
 #[repr(C)]
 pub struct Descriptor {
     pub descriptor_type: u16,
@@ -330,6 +330,112 @@ impl Descriptor {
 
     pub fn codec_size_in_bytes(&self) -> usize {
         core::mem::size_of::<u16>() * 2 + self.descriptor_length as usize
+    }
+
+    /// Calculates the total length of a list of descriptors from a blob.
+    ///
+    /// This simplifies the use case where multiple descriptors are used in a message,
+    /// and the total length needs to be calculated.
+    /// It follows the linked list of descriptors by decoding each one in sequence.
+    ///
+    /// The blob must start with the first descriptor, but may contain additional data after the last descriptor.
+    ///
+    /// ```rust
+    /// use pldm_lib::protocol::firmware_update::{Descriptor, DescriptorType, get_descriptor_length};
+    /// use crate::pldm_lib::codec::PldmCodec;
+    ///
+    /// let dsc_0 = Descriptor::new(DescriptorType::PciVendorId, &[0x11, 0x22]).unwrap();
+    /// let dsc_1 = Descriptor::new(DescriptorType::PciVendorId, &[0x33, 0x44]).unwrap();
+    /// const BLOB_LEN: usize = (size_of::<u16>() * 2 + 2 * size_of::<u8>()) * 2 as usize;
+    /// let mut blob = [0u8; BLOB_LEN];
+    ///
+    /// let offset = dsc_0.encode(&mut blob[0..]).unwrap();
+    /// let _ = dsc_1.encode(&mut blob[offset..]).unwrap();
+    ///
+    /// let total_len = Descriptor::try_get_descriptor_length_from_blob(&blob, 2).unwrap();
+    /// assert_eq!(total_len, dsc_0.codec_size_in_bytes() + dsc_1.codec_size_in_bytes());
+    /// ```
+    pub fn try_get_descriptor_length_from_blob(
+        blob: &[u8],
+        desc_count: usize,
+    ) -> Result<usize, PldmCodecError> {
+        let mut offset = 0;
+        let mut total_len = 0;
+
+        for _ in 0..desc_count {
+            let descriptor = Descriptor::decode(&blob[offset..])?;
+            total_len += descriptor.codec_size_in_bytes();
+            offset += descriptor.codec_size_in_bytes();
+        }
+
+        Ok(total_len)
+    }
+}
+
+impl PldmCodec for Descriptor {
+    /// Custom encode implementation of PldmCodec for Descriptor to handle variable-length.
+    ///
+    /// The descriptor_data field is variable-length, so we need to ensure that only the valid portion
+    /// of the array is encoded, not all data of the fixed size array of length [DESCRIPTOR_DATA_MAX_LEN].
+    fn encode(&self, buffer: &mut [u8]) -> Result<usize, PldmCodecError> {
+        if buffer.len() < self.codec_size_in_bytes() {
+            return Err(PldmCodecError::BufferTooShort);
+        }
+        let mut offset = 0;
+
+        self.descriptor_type
+            .write_to(&mut buffer[offset..offset + core::mem::size_of::<u16>()])
+            .unwrap();
+        offset += core::mem::size_of::<u16>();
+
+        self.descriptor_length
+            .write_to(&mut buffer[offset..offset + core::mem::size_of::<u16>()])
+            .unwrap();
+        offset += core::mem::size_of::<u16>();
+
+        self.descriptor_data[..self.descriptor_length as usize]
+            .write_to(&mut buffer[offset..offset + self.descriptor_length as usize])
+            .unwrap();
+        offset += self.descriptor_length as usize;
+
+        Ok(offset)
+    }
+
+    /// Custom decode implementation of PldmCodec for Descriptor to handle variable-length.
+    ///
+    /// The descriptor_data field is variable-length, so we need to ensure that only the valid portion
+    /// of the array is decoded, not all data of the fixed size array of length [DESCRIPTOR_DATA_MAX_LEN].
+    fn decode(buffer: &[u8]) -> Result<Self, PldmCodecError> {
+        let mut offset = 0;
+
+        let descriptor_type = u16::read_from_bytes(
+            buffer
+                .get(offset..offset + core::mem::size_of::<u16>())
+                .ok_or(PldmCodecError::BufferTooShort)?,
+        )
+        .unwrap();
+        offset += core::mem::size_of::<u16>();
+
+        let descriptor_length = u16::read_from_bytes(
+            buffer
+                .get(offset..offset + core::mem::size_of::<u16>())
+                .ok_or(PldmCodecError::BufferTooShort)?,
+        )
+        .unwrap();
+        offset += core::mem::size_of::<u16>();
+
+        let mut descriptor_data = [0u8; DESCRIPTOR_DATA_MAX_LEN];
+        descriptor_data[..descriptor_length as usize].copy_from_slice(
+            buffer
+                .get(offset..offset + descriptor_length as usize)
+                .ok_or(PldmCodecError::BufferTooShort)?,
+        );
+
+        Ok(Descriptor {
+            descriptor_type,
+            descriptor_length,
+            descriptor_data,
+        })
     }
 }
 
@@ -868,10 +974,28 @@ mod test {
             descriptor.descriptor_length,
             get_descriptor_length(DescriptorType::Uuid) as u16
         );
-        let mut buffer = [0u8; 512];
+        let mut buffer = [0u8; core::mem::size_of::<Descriptor>()];
         descriptor.encode(&mut buffer).unwrap();
+
         let decoded_descriptor = Descriptor::decode(&buffer).unwrap();
         assert_eq!(descriptor, decoded_descriptor);
+
+        let raw_descriptor = [
+            0xff, 0xff, // Type=VendorDefined
+            0x10, 0x00, // size=16
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E,
+            0x0F, 0x10,
+        ];
+        let decoded_raw_descriptor = Descriptor::decode(&raw_descriptor).unwrap();
+        assert_eq!(
+            decoded_raw_descriptor.descriptor_type,
+            DescriptorType::VendorDefined as u16,
+        );
+        assert_eq!(decoded_raw_descriptor.descriptor_length, 16,);
+        assert_eq!(
+            &decoded_raw_descriptor.descriptor_data[..16],
+            &raw_descriptor[4..20]
+        );
     }
 
     #[test]

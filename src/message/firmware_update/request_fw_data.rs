@@ -129,7 +129,6 @@ mod test {
         assert_eq!(request, decoded_request);
     }
 
-    #[ignore]
     #[test]
     fn test_request_firmware_data_response_codec() {
         let data = [0u8; 512];
@@ -137,7 +136,7 @@ mod test {
         let mut buffer = [0u8; 1024];
         let bytes = response.encode(&mut buffer).unwrap();
 
-        let decoded_response = RequestFirmwareDataResponse::decode(&buffer[..bytes]);
-        assert!(decoded_response.is_err());
+        let decoded_response = RequestFirmwareDataResponse::decode(&buffer[..bytes]).unwrap();
+        assert_eq!(response, decoded_response);
     }
 }

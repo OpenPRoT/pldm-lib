@@ -129,6 +129,43 @@ pldm_completion_code! {
 
 #[derive(Debug, Clone, PartialEq)]
 #[repr(C)]
+/// The total structure for QueryDownstreamIdentifiersResponse looks as follows:
+/// ```text
+/// QueryDownstreamIdentifiersResponse
+///  completion_code (u8)
+///  next_data_transfer_handle (u32)
+///  transfer_flag (u8)
+///  --- portion (variable-length)
+///    downstream_devices_length_i (u32)
+///    number_of_downstream_devices_i (u16)
+///    downstream_devices_index_i (u16)
+///    ---
+///      downstream_device_index_ij (u16)
+///      downstream_descriptor_count_ij (u8)
+///      ---
+///        descriptor_type_ijk (u16)
+///        descriptor_length_ijk (u16)
+///        descriptor_data_ijk (variable-length L_ijk)
+///           ...
+///        descriptor_type_ij(k+1) (u16)
+///        descriptor_length_ij(k+1) (u16)
+///        descriptor_data_ij(k+1) (variable-length L_ij(k+1))
+///           ...
+///     ...
+///     downstream_devices_index_i(j+1) (u16)
+///     downstream_device_count_i(j+1) (u8)
+///     ---
+///       descriptor_type_(i(j+1)k) (u16)
+///       descriptor_length_(i(j+1)k) (u16)
+///       descriptor_data_(i(j+1)k) (variable-length L_(i(j+1)k))
+///         ...
+///      ...
+///    downstream_devices_length_(i+1) (u32)
+///    number_of_downstream_devices_(i+1) (u16)
+///    downstream_devices_index_(i+1) (u16)
+///    ...
+/// ...
+/// ```
 pub struct QueryDownstreamIdentifiersResponse<'a> {
     pub hdr: PldmMsgHeader<[u8; PLDM_MSG_HEADER_LEN]>,
 
@@ -227,10 +264,10 @@ impl QueryDownstreamIdentifiersResponse<'_> {
     }
 }
 
-/// Iterate over all available [DownstreamDevice] in the response portion.
 impl<'a> Iterator for QueryDownstreamIdentifiersResponse<'a> {
     type Item = DownstreamDevice<'a>;
 
+    /// Iterate over all available [DownstreamDevice] in the response portion.
     fn next(&mut self) -> Option<Self::Item> {
         let portion_hdr = self.try_get_portion_header().ok()?;
         if self.portion_iter_current >= portion_hdr.number_of_downstream_devices as usize {
@@ -249,14 +286,18 @@ impl<'a> Iterator for QueryDownstreamIdentifiersResponse<'a> {
             return None;
         }
 
-        let hdr = self
+        let hdr: DownstreamDevicesHeader = self
             .try_get_downstream_device_header(&self.portion[offset..])
             .ok()?;
         let device_header_size = size_of::<DownstreamDevicesHeader>();
-        let descriptors_size = hdr.downstream_descriptor_count as usize * size_of::<Descriptor>();
-        let total_device_size = device_header_size + descriptors_size;
 
-        let next_offset = offset + total_device_size;
+        let desc_size = Descriptor::try_get_descriptor_length_from_blob(
+            &self.portion[offset + device_header_size..],
+            hdr.downstream_descriptor_count as usize,
+        )
+        .ok()?;
+
+        let next_offset = offset + device_header_size + desc_size;
         if next_offset > self.portion.len() {
             self.portion_iter_current = 0;
             self.portion_offset_next = 0;
@@ -423,19 +464,27 @@ impl Iterator for DownstreamDevice<'_> {
             return None;
         }
 
-        let descriptor_size = size_of::<Descriptor>();
-        if self.downstream_descriptors.len() < descriptor_size {
-            self._iter_dev_count = 0;
-            self._iter_offset = 0;
+        // Read the descriptor length while skipping the type field
+        let descriptor_length = u16::read_from_bytes(
+            &self.downstream_descriptors
+                [self._iter_offset + size_of::<u16>()..self._iter_offset + size_of::<u16>() * 2],
+        )
+        .ok()? as usize;
+
+        // check bounds
+        if self._iter_offset + size_of::<u16>() * 2 + descriptor_length
+            > self.downstream_descriptors.len()
+        {
             return None;
         }
 
-        let descriptor = Descriptor::try_read_from_prefix(
-            &self.downstream_descriptors[self._iter_offset..self._iter_offset + descriptor_size],
+        let descriptor = Descriptor::decode(
+            &self.downstream_descriptors
+                [self._iter_offset..self._iter_offset + 2 * size_of::<u16>() + descriptor_length],
         )
-        .ok()?
-        .0;
-        self._iter_offset += descriptor_size;
+        .ok()?;
+
+        self._iter_offset += size_of::<u16>() * 2 + descriptor_length;
         self._iter_dev_count += 1;
 
         Some(descriptor)
@@ -1141,7 +1190,7 @@ impl RequestDownstreamDeviceUpdateResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::PldmCodec;
+    use crate::{codec::PldmCodec, protocol::firmware_update::DescriptorType};
 
     #[test]
     fn test_query_downstream_devices_request_codec() {
@@ -1389,15 +1438,18 @@ mod tests {
         let descriptors: [Descriptor; 3] = [descriptor.clone(), descriptor.clone(), descriptor];
 
         const DESC_LEN: usize = size_of::<Descriptor>();
-        let mut descriptor_bytes: [u8; DESC_LEN * 3] = [0u8; DESC_LEN * 3];
+        let mut descriptor_bytes_max: [u8; DESC_LEN * 3] = [0u8; DESC_LEN * 3];
         let mut offset = 0;
+
+        // encoding
         for desc in descriptors.iter() {
-            descriptor_bytes[offset..offset + DESC_LEN].copy_from_slice(&desc.as_bytes());
-            offset += DESC_LEN;
+            let encoded = desc.encode(&mut descriptor_bytes_max[offset..]).unwrap();
+            offset += encoded;
         }
 
         let downstream_device_index = DownstreamDeviceIndex::try_from(1).unwrap();
-        let downstream_device = DownstreamDevice::new(downstream_device_index, &descriptor_bytes);
+        let downstream_device =
+            DownstreamDevice::new(downstream_device_index, &descriptor_bytes_max);
 
         let mut buffer = [0u8; 256];
         let bytes_written = downstream_device.encode(&mut buffer).unwrap();
@@ -1407,6 +1459,7 @@ mod tests {
 
     #[test]
     fn test_iterator_query_downstream_identifiers_response() {
+        const DSC_DATA_LEN: usize = 16;
         let instance_id: InstanceId = 0x01;
         let ph: PortionHeader = PortionHeader {
             downstream_devices_length: 1,
@@ -1417,22 +1470,21 @@ mod tests {
             downstream_descriptor_count: 3,
         };
         let dsc_0: Descriptor = Descriptor {
-            descriptor_type: 0xff,
-            descriptor_length: 0x02,
+            descriptor_type: DescriptorType::VendorDefined as u16,
+            descriptor_length: DSC_DATA_LEN as u16,
             descriptor_data: [0u8; 64],
         };
 
         let mut dsc_1 = dsc_0.clone();
-        dsc_1.descriptor_type = 0xfe;
-        dsc_1.descriptor_data = [1u8; 64];
+        dsc_1.descriptor_data[0..16].clone_from_slice(&[1u8; 16]);
 
         let mut dsc_2 = dsc_0.clone();
-        dsc_2.descriptor_type = 0xfd;
-        dsc_2.descriptor_data = [2u8; 64];
+        dsc_2.descriptor_data[0..16].clone_from_slice(&[2u8; 16]);
 
         const LEN: usize = size_of::<PortionHeader>()
             + size_of::<DownstreamDevicesHeader>()
-            + 3 * size_of::<Descriptor>();
+            + 3 * (2 * size_of::<u16>() + DSC_DATA_LEN); // type + length + data
+
         let mut offset = 0;
         let mut portion: [u8; LEN] = [0u8; LEN];
 
@@ -1443,13 +1495,10 @@ mod tests {
             .copy_from_slice(&dsdh.as_bytes());
         offset += size_of::<DownstreamDevicesHeader>();
 
-        portion[offset..offset + size_of::<Descriptor>()].copy_from_slice(&dsc_0.as_bytes());
-        offset += size_of::<Descriptor>();
-
-        portion[offset..offset + size_of::<Descriptor>()].copy_from_slice(&dsc_1.as_bytes());
-        offset += size_of::<Descriptor>();
-
-        portion[offset..offset + size_of::<Descriptor>()].copy_from_slice(&dsc_2.as_bytes());
+        for desc in [dsc_0.clone(), dsc_1.clone(), dsc_2.clone()].iter() {
+            let size = &desc.encode(&mut portion[offset..]).unwrap();
+            offset += size;
+        }
 
         let mut qdir = QueryDownstreamIdentifiersResponse::new(
             instance_id,

@@ -213,7 +213,6 @@ mod test {
     use super::*;
     use crate::protocol::firmware_update::{Descriptor, DescriptorType};
 
-    #[ignore]
     #[test]
     fn test_query_device_identifiers_resp_codec() {
         let instance_id = 0;
