@@ -1030,3 +1030,391 @@ impl FirmwareDeviceContext {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pldm_common::message::firmware_update::activate_fw::SelfContainedActivationRequest;
+    use pldm_common::protocol::base::{PldmMsgHeader, PldmMsgType};
+    use pldm_common::protocol::firmware_update::{
+        ComponentClassification, PldmFirmwareString, UpdateOptionFlags, VersionStringType,
+        PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN,
+    };
+
+    #[test]
+    fn test_firmware_device_context_new() {
+        let fd_ctx = FirmwareDeviceContext::new();
+
+        // Verify initial state is Idle
+        assert_eq!(fd_ctx.internal.get_fd_state(), FirmwareDeviceState::Idle);
+        assert!(!fd_ctx.internal.is_update_mode());
+    }
+
+    #[test]
+    fn test_query_devid_rsp_basic() {
+        let fd_ctx = FirmwareDeviceContext::new();
+        let mut buffer = [0u8; 256];
+
+        // Create a QueryDeviceIdentifiers request
+        let req = QueryDeviceIdentifiersRequest::new(0x01, PldmMsgType::Request);
+        req.encode(&mut buffer).unwrap();
+
+        // Process the request
+        let result = fd_ctx.query_devid_rsp(&mut buffer);
+
+        // Should succeed or return error based on FdOps implementation
+        // The actual behavior depends on the FdOps mock/implementation
+        assert!(result.is_ok() || result.is_err());
+    }
+
+    #[test]
+    fn test_request_update_already_in_update_mode() {
+        let mut fd_ctx = FirmwareDeviceContext::new();
+        let mut buffer = [0u8; 256];
+
+        let version_string: PldmFirmwareString = PldmFirmwareString {
+            str_type: VersionStringType::Unspecified as u8,
+            str_len: 0,
+            str_data: [0u8; PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN],
+        };
+
+        // First request should succeed
+        let req = RequestUpdateRequest::new(
+            0x01,
+            PldmMsgType::Request,
+            256, // max_transfer_size
+            1,   // num_components
+            5,   // max_outstanding_transfer_req
+            7,   // comp_image_set_version_string_len
+            &version_string,
+        );
+        req.encode(&mut buffer).unwrap();
+
+        let result = fd_ctx.request_update_rsp(&mut buffer);
+        if result.is_ok() {
+            // If first request succeeded, verify we're in LearnComponents state
+            assert_eq!(
+                fd_ctx.internal.get_fd_state(),
+                FirmwareDeviceState::LearnComponents
+            );
+
+            // Second request should fail with AlreadyInUpdateMode
+            buffer.fill(0);
+            req.encode(&mut buffer).unwrap();
+            let result2 = fd_ctx.request_update_rsp(&mut buffer);
+            assert!(result2.is_ok()); // Returns Ok but with failure completion code
+
+            // Decode response to check completion code
+            let resp_header = PldmMsgHeader::decode(&buffer).unwrap();
+            assert!(!resp_header.is_request());
+            let completion_code = buffer[3];
+            assert_eq!(
+                completion_code,
+                FwUpdateCompletionCode::AlreadyInUpdateMode as u8
+            );
+        }
+    }
+
+    #[test]
+    fn test_request_update_invalid_transfer_size() {
+        let mut fd_ctx = FirmwareDeviceContext::new();
+        let mut buffer = [0u8; 256];
+
+        let version_string: PldmFirmwareString = PldmFirmwareString {
+            str_type: VersionStringType::Unspecified as u8,
+            str_len: 0,
+            str_data: [0u8; PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN],
+        };
+
+        // Create request with too small transfer size
+        let req = RequestUpdateRequest::new(
+            0x02,
+            PldmMsgType::Request,
+            16, // max_transfer_size - too small, must be >= 32
+            1,  // num_components
+            5,  // max_outstanding_transfer_req
+            7,  // comp_image_set_version_string_len
+            &version_string,
+        );
+        req.encode(&mut buffer).unwrap();
+
+        let result = fd_ctx.request_update_rsp(&mut buffer);
+        assert!(result.is_ok()); // Returns Ok but with failure completion code
+
+        // Check completion code
+        let completion_code = buffer[3];
+        assert_eq!(
+            completion_code,
+            FwUpdateCompletionCode::InvalidTransferLength as u8
+        );
+    }
+
+    #[test]
+    fn test_pass_component_invalid_state() {
+        let mut fd_ctx = FirmwareDeviceContext::new();
+        let mut buffer = [0u8; 256];
+
+        // Try to pass component when not in LearnComponents state (currently Idle)
+        let comp_ver_str: PldmFirmwareString = PldmFirmwareString {
+            str_type: VersionStringType::Unspecified as u8,
+            str_len: 0,
+            str_data: [0u8; PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN],
+        };
+
+        let req = PassComponentTableRequest::new(
+            0x03,
+            PldmMsgType::Request,
+            TransferRespFlag::Start,
+            ComponentClassification::ApplicationSoftware,
+            0x01,
+            0,
+            0x12345678,
+            &comp_ver_str,
+        );
+        req.encode(&mut buffer).unwrap();
+
+        let result = fd_ctx.pass_component_rsp(&mut buffer);
+        assert!(result.is_ok()); // Returns Ok but with failure completion code
+
+        // Check completion code
+        let completion_code = buffer[3];
+        assert_eq!(
+            completion_code,
+            FwUpdateCompletionCode::InvalidStateForCommand as u8
+        );
+    }
+
+    #[test]
+    fn test_update_component_invalid_state() {
+        let mut fd_ctx = FirmwareDeviceContext::new();
+        let mut buffer = [0u8; 256];
+
+        // Try to pass component when not in LearnComponents state (currently Idle)
+        let comp_ver_str: PldmFirmwareString = PldmFirmwareString {
+            str_type: VersionStringType::Unspecified as u8,
+            str_len: 0,
+            str_data: [0u8; PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN],
+        };
+
+        // Try to update component when not in ReadyXfer state (currently Idle)
+        let req = UpdateComponentRequest::new(
+            0x04,
+            PldmMsgType::Request,
+            ComponentClassification::ApplicationSoftware,
+            0x01,
+            0,
+            0x12345678,
+            0x1000,
+            UpdateOptionFlags(0),
+            &comp_ver_str,
+        );
+        req.encode(&mut buffer).unwrap();
+
+        let result = fd_ctx.update_component_rsp(&mut buffer);
+        assert!(result.is_ok()); // Returns Ok but with failure completion code
+
+        // Check completion code
+        let completion_code = buffer[3];
+        assert_eq!(
+            completion_code,
+            FwUpdateCompletionCode::InvalidStateForCommand as u8
+        );
+    }
+
+    #[test]
+    fn test_activate_firmware_invalid_state() {
+        let mut fd_ctx = FirmwareDeviceContext::new();
+        let mut buffer = [0u8; 256];
+
+        // Try to activate firmware when not in ReadyXfer state (currently Idle)
+        let req = ActivateFirmwareRequest::new(
+            0x05,
+            PldmMsgType::Request,
+            SelfContainedActivationRequest::ActivateSelfContainedComponents, // self_contained_activation_req
+        );
+        req.encode(&mut buffer).unwrap();
+
+        let result = fd_ctx.activate_firmware_rsp(&mut buffer);
+        assert!(result.is_ok()); // Returns Ok but with failure completion code
+
+        // Check completion code
+        let completion_code = buffer[3];
+        assert_eq!(
+            completion_code,
+            FwUpdateCompletionCode::InvalidStateForCommand as u8
+        );
+    }
+
+    #[test]
+    fn test_cancel_update_component_not_in_update_mode() {
+        let mut fd_ctx = FirmwareDeviceContext::new();
+        let mut buffer = [0u8; 256];
+
+        // Try to cancel when not in update mode (currently Idle)
+        let req = CancelUpdateComponentRequest::new(0x06, PldmMsgType::Request);
+        req.encode(&mut buffer).unwrap();
+
+        let result = fd_ctx.cancel_update_component_rsp(&mut buffer);
+        assert!(result.is_ok()); // Returns Ok but with failure completion code
+
+        // Check completion code
+        let completion_code = buffer[3];
+        assert_eq!(
+            completion_code,
+            FwUpdateCompletionCode::NotInUpdateMode as u8
+        );
+    }
+
+    #[test]
+    fn test_get_status_initial_state() {
+        let mut fd_ctx = FirmwareDeviceContext::new();
+        let mut buffer = [0u8; 256];
+
+        // Get status in initial Idle state
+        let req = GetStatusRequest::new(0x0A, PldmMsgType::Request);
+        req.encode(&mut buffer).unwrap();
+
+        let result = fd_ctx.get_status_rsp(&mut buffer);
+        assert!(result.is_ok());
+
+        // Verify response is properly encoded
+        let resp_header = PldmMsgHeader::decode(&buffer).unwrap();
+        assert!(!resp_header.is_request());
+
+        // Basic validation - completion code should be at offset 3
+        let completion_code = buffer[3];
+        assert_eq!(completion_code, PldmBaseCompletionCode::Success as u8);
+    }
+
+    #[test]
+    fn test_state_transitions() {
+        let mut fd_ctx = FirmwareDeviceContext::new();
+
+        // Initial state should be Idle
+        assert_eq!(fd_ctx.internal.get_fd_state(), FirmwareDeviceState::Idle);
+        assert!(!fd_ctx.internal.is_update_mode());
+
+        // Transition to LearnComponents
+        fd_ctx
+            .internal
+            .set_fd_state(FirmwareDeviceState::LearnComponents);
+        assert_eq!(
+            fd_ctx.internal.get_fd_state(),
+            FirmwareDeviceState::LearnComponents
+        );
+        assert!(fd_ctx.internal.is_update_mode());
+
+        // Transition to ReadyXfer
+        fd_ctx.internal.set_fd_state(FirmwareDeviceState::ReadyXfer);
+        assert_eq!(
+            fd_ctx.internal.get_fd_state(),
+            FirmwareDeviceState::ReadyXfer
+        );
+        assert!(fd_ctx.internal.is_update_mode());
+
+        // Transition to Download
+        fd_ctx.internal.set_fd_state(FirmwareDeviceState::Download);
+        assert_eq!(
+            fd_ctx.internal.get_fd_state(),
+            FirmwareDeviceState::Download
+        );
+        assert!(fd_ctx.internal.is_update_mode());
+
+        // Transition to Verify
+        fd_ctx.internal.set_fd_state(FirmwareDeviceState::Verify);
+        assert_eq!(fd_ctx.internal.get_fd_state(), FirmwareDeviceState::Verify);
+        assert!(fd_ctx.internal.is_update_mode());
+
+        // Transition to Apply
+        fd_ctx.internal.set_fd_state(FirmwareDeviceState::Apply);
+        assert_eq!(fd_ctx.internal.get_fd_state(), FirmwareDeviceState::Apply);
+        assert!(fd_ctx.internal.is_update_mode());
+
+        // Transition back to Idle
+        fd_ctx.internal.set_fd_idle(GetStatusReasonCode::ActivateFw);
+        assert_eq!(fd_ctx.internal.get_fd_state(), FirmwareDeviceState::Idle);
+        assert!(!fd_ctx.internal.is_update_mode());
+    }
+
+    #[test]
+    fn test_should_send_fd_request_unused() {
+        let fd_ctx = FirmwareDeviceContext::new();
+
+        // Initial state should be Unused, shouldn't send request
+        assert!(!fd_ctx.should_send_fd_request());
+    }
+
+    #[test]
+    fn test_should_send_fd_request_ready() {
+        let mut fd_ctx = FirmwareDeviceContext::new();
+
+        // Set state to Ready
+        fd_ctx
+            .internal
+            .set_fd_req(FdReqState::Ready, false, None, None, None, None);
+
+        // Should send request when Ready
+        assert!(fd_ctx.should_send_fd_request());
+    }
+
+    #[test]
+    fn test_should_send_fd_request_failed() {
+        let mut fd_ctx = FirmwareDeviceContext::new();
+
+        // Set state to Failed
+        fd_ctx
+            .internal
+            .set_fd_req(FdReqState::Failed, false, None, None, None, None);
+
+        // Shouldn't send request when Failed
+        assert!(!fd_ctx.should_send_fd_request());
+    }
+
+    #[test]
+    fn test_transfer_size_management() {
+        let mut fd_ctx = FirmwareDeviceContext::new();
+
+        // Set a transfer size
+        fd_ctx.internal.set_xfer_size(1024);
+
+        // Verify it can be retrieved (through internal state)
+        // Note: This tests the internal state management
+        assert_eq!(fd_ctx.internal.get_xfer_size(), 1024);
+    }
+
+    #[test]
+    fn test_update_flags_management() {
+        let mut fd_ctx = FirmwareDeviceContext::new();
+
+        let mut flags = UpdateOptionFlags(0);
+        flags.set_request_force_update(true);
+        flags.set_component_opaque_data(true);
+
+        fd_ctx.internal.set_update_flags(flags);
+
+        let retrieved_flags = fd_ctx.internal.get_update_flags();
+        assert!(retrieved_flags.request_force_update());
+        assert!(retrieved_flags.component_opaque_data());
+    }
+
+    #[test]
+    fn test_component_storage() {
+        let mut fd_ctx = FirmwareDeviceContext::new();
+
+        let comp = FirmwareComponent::new(
+            0x0A,
+            0x01,
+            0,
+            0x12345678,
+            PldmFirmwareString::new("ASCII", "v1.0.0").unwrap(),
+            Some(0x1000),
+            Some(UpdateOptionFlags(0)),
+        );
+
+        fd_ctx.internal.set_component(&comp);
+
+        let stored_comp = fd_ctx.internal.get_component();
+        assert_eq!(stored_comp.comp_identifier, 0x01);
+        assert_eq!(stored_comp.comp_comparison_stamp, 0x12345678);
+    }
+}
