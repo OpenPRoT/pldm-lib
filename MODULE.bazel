@@ -1,0 +1,16 @@
+module(
+    name = "pldm_lib",
+    version = "0.1.0",
+)
+
+bazel_dep(name = "rules_rust", version = "0.68.1")
+
+crate = use_extension("@rules_rust//crate_universe:extension.bzl", "crate")
+crate.from_cargo(
+    name = "pldm_crates",
+    cargo_lockfile = "//:Cargo.lock",
+    manifests = [
+        "//:Cargo.toml",
+    ],
+)
+use_repo(crate, "pldm_crates")

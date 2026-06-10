@@ -69,18 +69,22 @@ use crate::firmware_device::fd_internal::{
     ApplyState, DownloadState, InitiatorModeState, VerifyState,
 };
 
-pub struct FirmwareDeviceContext {
-    ops: FdOps,
+pub struct FirmwareDeviceContext<'a> {
+    ops: &'a dyn FdOps,
     internal: FdInternal,
 }
 
-impl FirmwareDeviceContext {
+impl<'a> FirmwareDeviceContext<'a> {
     #[allow(clippy::new_without_default)]
-    pub fn new() -> Self {
+    pub fn new(ops: &'a dyn FdOps) -> Self {
         Self {
-            ops: FdOps::new(),
+            ops,
             internal: FdInternal::new(0, 0, 0),
         }
+    }
+
+    pub fn is_update_mode(&self) -> bool {
+        self.internal.is_update_mode()
     }
 
     pub fn query_devid_rsp(&self, payload: &mut [u8]) -> Result<usize, MsgHandlerError> {
@@ -627,7 +631,12 @@ impl FirmwareDeviceContext {
     }
 
     pub fn should_start_initiator_mode(&mut self) -> bool {
-        self.internal.get_fd_state() == FirmwareDeviceState::Download
+        matches!(
+            self.internal.get_fd_state(),
+            FirmwareDeviceState::Download
+                | FirmwareDeviceState::Verify
+                | FirmwareDeviceState::Apply
+        )
     }
 
     pub fn should_stop_initiator_mode(&mut self) -> bool {

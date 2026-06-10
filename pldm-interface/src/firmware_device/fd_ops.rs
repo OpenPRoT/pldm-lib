@@ -44,19 +44,13 @@ pub enum ComponentOperation {
     UpdateComponent,
 }
 
-pub struct FdOps {}
-
 /// Trait for firmware device-specific operations.
 ///
 /// This trait defines asynchronous methods for performing various firmware device operations,
 /// including retrieving device identifiers, firmware parameters, and transfer sizes. It also
 /// provides methods for handling firmware components, managing firmware data downloads, verifying
 /// and applying firmware, activating new firmware, and obtaining the current timestamp.
-impl FdOps {
-    pub fn new() -> Self {
-        Self {}
-    }
-
+pub trait FdOps {
     /// Asynchronously retrieves device identifiers.
     ///
     /// # Arguments
@@ -67,13 +61,10 @@ impl FdOps {
     ///
     /// * `Result<usize, FdOpsError>` - On success, returns the number of device identifiers retrieved.
     ///   On failure, returns an `FdOpsError`.
-    pub fn get_device_identifiers(
+    fn get_device_identifiers(
         &self,
         device_identifiers: &mut [Descriptor],
-    ) -> Result<usize, FdOpsError> {
-        device_identifiers.fill_with(Descriptor::default);
-        Ok(device_identifiers.len())
-    }
+    ) -> Result<usize, FdOpsError>;
 
     /// Asynchronously retrieves firmware parameters.
     ///
@@ -84,14 +75,10 @@ impl FdOps {
     /// # Returns
     ///
     /// * `Result<(), FdOpsError>` - On success, returns `Ok(())`. On failure, returns an `FdOpsError`.
-    pub fn get_firmware_parms(
+    fn get_firmware_parms(
         &self,
         firmware_params: &mut FirmwareParameters,
-    ) -> Result<(), FdOpsError> {
-        *firmware_params = FirmwareParameters::default();
-
-        Ok(())
-    }
+    ) -> Result<(), FdOpsError>;
 
     /// Retrieves the transfer size for the firmware update operation.
     ///
@@ -103,9 +90,7 @@ impl FdOps {
     ///
     /// * `Result<usize, FdOpsError>` - On success, returns the transfer size in bytes.
     ///   On failure, returns an `FdOpsError`.
-    pub fn get_xfer_size(&self, ua_transfer_size: usize) -> Result<usize, FdOpsError> {
-        Ok(ua_transfer_size)
-    }
+    fn get_xfer_size(&self, ua_transfer_size: usize) -> Result<usize, FdOpsError>;
 
     /// Handles firmware component operations such as passing or updating components.
     ///
@@ -119,15 +104,12 @@ impl FdOps {
     ///
     /// * `Result<ComponentResponseCode, FdOpsError>` - On success, returns a `ComponentResponseCode`.
     ///   On failure, returns an `FdOpsError`.
-    #[allow(unused_variables)]
-    pub fn handle_component(
+    fn handle_component(
         &self,
         component: &FirmwareComponent,
         fw_params: &FirmwareParameters,
         op: ComponentOperation,
-    ) -> Result<ComponentResponseCode, FdOpsError> {
-        Ok(ComponentResponseCode::CompNotSupported)
-    }
+    ) -> Result<ComponentResponseCode, FdOpsError>;
 
     /// Queries the download offset and length for a given firmware component.
     ///
@@ -139,13 +121,10 @@ impl FdOps {
     ///
     /// * `Result<(usize, usize), FdOpsError>` - On success, returns a tuple containing the offset and length in bytes.
     ///   On failure, returns an `FdOpsError`.
-    #[allow(unused_variables)]
-    pub fn query_download_offset_and_length(
+    fn query_download_offset_and_length(
         &self,
         component: &FirmwareComponent,
-    ) -> Result<(usize, usize), FdOpsError> {
-        Ok((0xff, 0xff))
-    }
+    ) -> Result<(usize, usize), FdOpsError>;
 
     /// Handles firmware data downloading operations.
     ///
@@ -159,15 +138,12 @@ impl FdOps {
     ///
     /// * `Result<TransferResult, FdOpsError>` - On success, returns a `TransferResult` indicating the outcome of the operation.
     ///   On failure, returns an `FdOpsError`.
-    #[allow(unused_variables)]
-    pub fn download_fw_data(
+    fn download_fw_data(
         &self,
         offset: usize,
         data: &[u8],
         component: &FirmwareComponent,
-    ) -> Result<TransferResult, FdOpsError> {
-        Ok(TransferResult::TransferTimeOut)
-    }
+    ) -> Result<TransferResult, FdOpsError>;
 
     /// Checks if the firmware download for a given component is complete.
     ///
@@ -178,10 +154,7 @@ impl FdOps {
     /// # Returns
     ///
     /// * `bool` - Returns `true` if the download is complete, otherwise `false`.
-    #[allow(unused_variables)]
-    pub fn is_download_complete(&self, component: &FirmwareComponent) -> bool {
-        false
-    }
+    fn is_download_complete(&self, component: &FirmwareComponent) -> bool;
 
     /// Queries the download progress for a given firmware component.
     ///
@@ -193,14 +166,11 @@ impl FdOps {
     /// # Returns
     ///
     /// * `Result<(), FdOpsError>` - On success, returns `Ok(())`. On failure, returns an `FdOpsError`.
-    #[allow(unused_variables)]
-    pub fn query_download_progress(
+    fn query_download_progress(
         &self,
         component: &FirmwareComponent,
         progress_percent: &mut ProgressPercent,
-    ) -> Result<(), FdOpsError> {
-        Ok(())
-    }
+    ) -> Result<(), FdOpsError>;
 
     /// Verifies the firmware component.
     ///
@@ -213,14 +183,11 @@ impl FdOps {
     ///
     /// * `Result<VerifyResult, FdOpsError>` - On success, returns a `VerifyResult` indicating the outcome of the verification.
     /// *   On failure, returns an `FdOpsError`.
-    #[allow(unused_variables)]
-    pub fn verify(
+    fn verify(
         &self,
         component: &FirmwareComponent,
         progress_percent: &mut ProgressPercent,
-    ) -> Result<VerifyResult, FdOpsError> {
-        Ok(VerifyResult::VerifyGenericError)
-    }
+    ) -> Result<VerifyResult, FdOpsError>;
 
     /// Applies the firmware component.
     ///
@@ -233,14 +200,11 @@ impl FdOps {
     ///
     /// * `Result<ApplyResult, FdOpsError>` - On success, returns an `ApplyResult` indicating the outcome of the application.
     /// *   On failure, returns an `FdOpsError`.
-    #[allow(unused_variables)]
-    pub fn apply(
+    fn apply(
         &self,
         component: &FirmwareComponent,
         progress_percent: &mut ProgressPercent,
-    ) -> Result<ApplyResult, FdOpsError> {
-        Ok(ApplyResult::ApplyGenericError)
-    }
+    ) -> Result<ApplyResult, FdOpsError>;
 
     /// Activates new firmware.
     ///
@@ -257,14 +221,11 @@ impl FdOps {
     ///
     /// The device implementation is responsible for verifying that the expected components
     /// have been updated. If not, it should return `PLDM_FWUP_INCOMPLETE_UPDATE`.
-    #[allow(unused_variables)]
-    pub fn activate(
+    fn activate(
         &self,
         self_contained_activation: u8,
         estimated_time: &mut u16,
-    ) -> Result<u8, FdOpsError> {
-        Ok(0xff)
-    }
+    ) -> Result<u8, FdOpsError>;
 
     /// Cancels the update operation for a specific firmware component.
     ///
@@ -275,10 +236,7 @@ impl FdOps {
     /// # Returns
     ///
     /// * `Result<(), FdOpsError>` - On success, returns `Ok(())`. On failure, returns an `FdOpsError`.
-    #[allow(unused_variables)]
-    pub fn cancel_update_component(&self, component: &FirmwareComponent) -> Result<(), FdOpsError> {
-        Ok(())
-    }
+    fn cancel_update_component(&self, component: &FirmwareComponent) -> Result<(), FdOpsError>;
 
     /// Indicates which components will be in a non-functioning state upon exiting update mode
     /// due to cancel update request from UA.
@@ -290,7 +248,7 @@ impl FdOps {
     ///     - `NonFunctioningComponentIndication`: Indicates whether components are functioning or not.
     ///     - `NonFunctioningComponentBitmap`: A bitmap representing non-functioning components.
     ///       On failure, returns an `FdOpsError`.
-    pub fn get_non_functional_component_info(
+    fn get_non_functional_component_info(
         &self,
     ) -> Result<
         (
@@ -310,13 +268,7 @@ impl FdOps {
     /// # Returns
     ///
     /// * `PldmFdTime` - The current timestamp in milliseconds.
-    pub fn now(&self) -> PldmFdTime {
+    fn now(&self) -> PldmFdTime {
         0xbaddbadd
-    }
-}
-
-impl Default for FdOps {
-    fn default() -> Self {
-        Self::new()
     }
 }

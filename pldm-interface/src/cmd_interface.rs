@@ -41,20 +41,26 @@ pub(crate) fn generate_failure_response(
 }
 
 pub struct CmdInterface<'a> {
-    ctrl_ctx: ControlContext<'a>,
-    fd_ctx: FirmwareDeviceContext,
+    pub ctrl_ctx: ControlContext<'a>,
+    pub fd_ctx: FirmwareDeviceContext<'a>,
     busy: AtomicBool,
 }
 
 impl<'a> CmdInterface<'a> {
-    pub fn new(protocol_capabilities: &'a [ProtocolCapability]) -> Self {
+    pub fn new(
+        protocol_capabilities: &'a [ProtocolCapability],
+        fd_ctx: FirmwareDeviceContext<'a>,
+    ) -> Self {
         let ctrl_ctx = ControlContext::new(protocol_capabilities);
-        let fd_ctx = FirmwareDeviceContext::new();
         Self {
             ctrl_ctx,
             fd_ctx,
             busy: AtomicBool::new(false),
         }
+    }
+
+    pub fn is_update_mode(&self) -> bool {
+        self.fd_ctx.is_update_mode()
     }
 
     pub fn handle_responder_msg(&mut self, msg_buf: &mut [u8]) -> Result<usize, MsgHandlerError> {
@@ -74,12 +80,47 @@ impl<'a> CmdInterface<'a> {
             return Ok(());
         }
 
+        Ok(())
+    }
+
+    pub fn handle_initiator_response(&mut self, msg_buf: &mut [u8]) -> Result<(), MsgHandlerError> {
+        // Recieve and parse response
         let payload = extract_pldm_msg(msg_buf).map_err(MsgHandlerError::Util)?;
 
         // Handle the response
         self.fd_ctx.handle_response(payload)?;
 
         Ok(())
+    }
+
+    /// Generate the next FD-initiated PLDM request into `msg_buf`.
+    ///
+    /// Sets the MCTP message-type byte at `msg_buf[0]` and writes the PLDM
+    /// request starting at `msg_buf[1]`.
+    ///
+    /// Returns `Ok(0)` when no request is pending (nothing to send).
+    /// Returns `Ok(n)` where `n` is the total number of bytes written to
+    /// `msg_buf` (1 MCTP header byte + `n - 1` PLDM bytes) when a request
+    /// was generated.
+    pub fn generate_initiator_request(
+        &mut self,
+        msg_buf: &mut [u8],
+    ) -> Result<usize, MsgHandlerError> {
+        let payload = construct_mctp_pldm_msg(msg_buf).map_err(MsgHandlerError::Util)?;
+        let pldm_len = self.fd_ctx.fd_progress(payload)?;
+        Ok(pldm_len)
+    }
+
+    /// Process a received FD-initiated PLDM response from `msg_buf`.
+    ///
+    /// `msg_buf[0]` must be the MCTP message-type byte (0x01).
+    /// `msg_buf[1..]` must contain the PLDM response payload.
+    pub fn process_initiator_response(
+        &mut self,
+        msg_buf: &mut [u8],
+    ) -> Result<(), MsgHandlerError> {
+        let payload = extract_pldm_msg(msg_buf).map_err(MsgHandlerError::Util)?;
+        self.fd_ctx.handle_response(payload)
     }
 
     fn process_request(&mut self, msg_buf: &mut [u8]) -> Result<usize, MsgHandlerError> {
