@@ -69,17 +69,17 @@ use crate::firmware_device::fd_internal::{
     ApplyState, DownloadState, InitiatorModeState, VerifyState,
 };
 
-pub struct FirmwareDeviceContext<'a> {
-    ops: &'a dyn FdOps,
+pub struct FirmwareDeviceContext<'a, O: FdOps> {
+    ops: &'a O,
     internal: FdInternal,
 }
 
-impl<'a> FirmwareDeviceContext<'a> {
+impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
     #[allow(clippy::new_without_default)]
-    pub fn new(ops: &'a dyn FdOps) -> Self {
+    pub fn new(ops: &'a O) -> Self {
         Self {
             ops,
-            internal: FdInternal::new(0, 0, 0),
+            internal: FdInternal::default(),
         }
     }
 
@@ -1044,15 +1044,143 @@ impl<'a> FirmwareDeviceContext<'a> {
 mod tests {
     use super::*;
     use pldm_common::message::firmware_update::activate_fw::SelfContainedActivationRequest;
+    use pldm_common::message::firmware_update::apply_complete::ApplyResult;
+    use pldm_common::message::firmware_update::get_status::ProgressPercent;
+    use pldm_common::message::firmware_update::request_cancel::{
+        NonFunctioningComponentBitmap, NonFunctioningComponentIndication,
+    };
+    use pldm_common::message::firmware_update::transfer_complete::TransferResult;
+    use pldm_common::message::firmware_update::verify_complete::VerifyResult;
     use pldm_common::protocol::base::{PldmMsgHeader, PldmMsgType};
     use pldm_common::protocol::firmware_update::{
-        ComponentClassification, PldmFirmwareString, UpdateOptionFlags, VersionStringType,
-        PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN,
+        ComponentClassification, ComponentResponseCode, Descriptor, PldmFirmwareString,
+        UpdateOptionFlags, VersionStringType, PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN,
     };
+    use pldm_common::util::fw_component::FirmwareComponent;
+
+    struct TestFdOps;
+
+    static TEST_FD_OPS: TestFdOps = TestFdOps;
+
+    impl FdOps for TestFdOps {
+        fn get_device_identifiers(
+            &self,
+            device_identifiers: &mut [Descriptor],
+        ) -> Result<usize, crate::firmware_device::fd_ops::FdOpsError> {
+            if let Some(first) = device_identifiers.first_mut() {
+                *first = Descriptor::default();
+            }
+            Ok(1)
+        }
+
+        fn get_firmware_parms(
+            &self,
+            _firmware_params: &mut FirmwareParameters,
+        ) -> Result<(), crate::firmware_device::fd_ops::FdOpsError> {
+            Ok(())
+        }
+
+        fn get_xfer_size(
+            &self,
+            ua_transfer_size: usize,
+        ) -> Result<usize, crate::firmware_device::fd_ops::FdOpsError> {
+            Ok(ua_transfer_size)
+        }
+
+        fn handle_component(
+            &self,
+            _component: &FirmwareComponent,
+            _fw_params: &FirmwareParameters,
+            _op: ComponentOperation,
+        ) -> Result<ComponentResponseCode, crate::firmware_device::fd_ops::FdOpsError> {
+            Ok(ComponentResponseCode::CompCanBeUpdated)
+        }
+
+        fn query_download_offset_and_length(
+            &self,
+            _component: &FirmwareComponent,
+        ) -> Result<(usize, usize), crate::firmware_device::fd_ops::FdOpsError> {
+            Ok((0, 32))
+        }
+
+        fn download_fw_data(
+            &self,
+            _offset: usize,
+            _data: &[u8],
+            _component: &FirmwareComponent,
+        ) -> Result<TransferResult, crate::firmware_device::fd_ops::FdOpsError> {
+            Ok(TransferResult::TransferSuccess)
+        }
+
+        fn is_download_complete(&self, _component: &FirmwareComponent) -> bool {
+            true
+        }
+
+        fn query_download_progress(
+            &self,
+            _component: &FirmwareComponent,
+            progress_percent: &mut ProgressPercent,
+        ) -> Result<(), crate::firmware_device::fd_ops::FdOpsError> {
+            *progress_percent = ProgressPercent::new(100).unwrap();
+            Ok(())
+        }
+
+        fn verify(
+            &self,
+            _component: &FirmwareComponent,
+            progress_percent: &mut ProgressPercent,
+        ) -> Result<VerifyResult, crate::firmware_device::fd_ops::FdOpsError> {
+            *progress_percent = ProgressPercent::new(100).unwrap();
+            Ok(VerifyResult::VerifySuccess)
+        }
+
+        fn apply(
+            &self,
+            _component: &FirmwareComponent,
+            progress_percent: &mut ProgressPercent,
+        ) -> Result<ApplyResult, crate::firmware_device::fd_ops::FdOpsError> {
+            *progress_percent = ProgressPercent::new(100).unwrap();
+            Ok(ApplyResult::ApplySuccess)
+        }
+
+        fn activate(
+            &self,
+            _self_contained_activation: u8,
+            _estimated_time: &mut u16,
+        ) -> Result<u8, crate::firmware_device::fd_ops::FdOpsError> {
+            Ok(PldmBaseCompletionCode::Success as u8)
+        }
+
+        fn cancel_update_component(
+            &self,
+            _component: &FirmwareComponent,
+        ) -> Result<(), crate::firmware_device::fd_ops::FdOpsError> {
+            Ok(())
+        }
+
+        fn get_non_functional_component_info(
+            &self,
+        ) -> Result<
+            (
+                NonFunctioningComponentIndication,
+                NonFunctioningComponentBitmap,
+            ),
+            crate::firmware_device::fd_ops::FdOpsError,
+        > {
+            Ok((
+                NonFunctioningComponentIndication::ComponentsFunctioning,
+                NonFunctioningComponentBitmap::new(0),
+            ))
+        }
+    }
+
+    fn new_test_fd_ctx() -> FirmwareDeviceContext<'static, TestFdOps> {
+        FirmwareDeviceContext::new(&TEST_FD_OPS)
+    }
 
     #[test]
     fn test_firmware_device_context_new() {
-        let fd_ctx = FirmwareDeviceContext::new();
+        let fd_ctx = new_test_fd_ctx();
 
         // Verify initial state is Idle
         assert_eq!(fd_ctx.internal.get_fd_state(), FirmwareDeviceState::Idle);
@@ -1061,7 +1189,7 @@ mod tests {
 
     #[test]
     fn test_query_devid_rsp_basic() {
-        let fd_ctx = FirmwareDeviceContext::new();
+        let fd_ctx = new_test_fd_ctx();
         let mut buffer = [0u8; 256];
 
         // Create a QueryDeviceIdentifiers request
@@ -1078,7 +1206,7 @@ mod tests {
 
     #[test]
     fn test_request_update_already_in_update_mode() {
-        let mut fd_ctx = FirmwareDeviceContext::new();
+        let mut fd_ctx = new_test_fd_ctx();
         let mut buffer = [0u8; 256];
 
         let version_string: PldmFirmwareString = PldmFirmwareString {
@@ -1126,7 +1254,7 @@ mod tests {
 
     #[test]
     fn test_request_update_invalid_transfer_size() {
-        let mut fd_ctx = FirmwareDeviceContext::new();
+        let mut fd_ctx = new_test_fd_ctx();
         let mut buffer = [0u8; 256];
 
         let version_string: PldmFirmwareString = PldmFirmwareString {
@@ -1160,7 +1288,7 @@ mod tests {
 
     #[test]
     fn test_pass_component_invalid_state() {
-        let mut fd_ctx = FirmwareDeviceContext::new();
+        let mut fd_ctx = new_test_fd_ctx();
         let mut buffer = [0u8; 256];
 
         // Try to pass component when not in LearnComponents state (currently Idle)
@@ -1195,7 +1323,7 @@ mod tests {
 
     #[test]
     fn test_update_component_invalid_state() {
-        let mut fd_ctx = FirmwareDeviceContext::new();
+        let mut fd_ctx = new_test_fd_ctx();
         let mut buffer = [0u8; 256];
 
         // Try to pass component when not in LearnComponents state (currently Idle)
@@ -1232,7 +1360,7 @@ mod tests {
 
     #[test]
     fn test_activate_firmware_invalid_state() {
-        let mut fd_ctx = FirmwareDeviceContext::new();
+        let mut fd_ctx = new_test_fd_ctx();
         let mut buffer = [0u8; 256];
 
         // Try to activate firmware when not in ReadyXfer state (currently Idle)
@@ -1256,7 +1384,7 @@ mod tests {
 
     #[test]
     fn test_cancel_update_component_not_in_update_mode() {
-        let mut fd_ctx = FirmwareDeviceContext::new();
+        let mut fd_ctx = new_test_fd_ctx();
         let mut buffer = [0u8; 256];
 
         // Try to cancel when not in update mode (currently Idle)
@@ -1276,7 +1404,7 @@ mod tests {
 
     #[test]
     fn test_get_status_initial_state() {
-        let mut fd_ctx = FirmwareDeviceContext::new();
+        let mut fd_ctx = new_test_fd_ctx();
         let mut buffer = [0u8; 256];
 
         // Get status in initial Idle state
@@ -1297,7 +1425,7 @@ mod tests {
 
     #[test]
     fn test_state_transitions() {
-        let mut fd_ctx = FirmwareDeviceContext::new();
+        let mut fd_ctx = new_test_fd_ctx();
 
         // Initial state should be Idle
         assert_eq!(fd_ctx.internal.get_fd_state(), FirmwareDeviceState::Idle);
@@ -1347,7 +1475,7 @@ mod tests {
 
     #[test]
     fn test_should_send_fd_request_unused() {
-        let fd_ctx = FirmwareDeviceContext::new();
+        let fd_ctx = new_test_fd_ctx();
 
         // Initial state should be Unused, shouldn't send request
         assert!(!fd_ctx.should_send_fd_request());
@@ -1355,7 +1483,7 @@ mod tests {
 
     #[test]
     fn test_should_send_fd_request_ready() {
-        let mut fd_ctx = FirmwareDeviceContext::new();
+        let mut fd_ctx = new_test_fd_ctx();
 
         // Set state to Ready
         fd_ctx
@@ -1368,7 +1496,7 @@ mod tests {
 
     #[test]
     fn test_should_send_fd_request_failed() {
-        let mut fd_ctx = FirmwareDeviceContext::new();
+        let mut fd_ctx = new_test_fd_ctx();
 
         // Set state to Failed
         fd_ctx
@@ -1381,7 +1509,7 @@ mod tests {
 
     #[test]
     fn test_transfer_size_management() {
-        let mut fd_ctx = FirmwareDeviceContext::new();
+        let mut fd_ctx = new_test_fd_ctx();
 
         // Set a transfer size
         fd_ctx.internal.set_xfer_size(1024);
@@ -1393,7 +1521,7 @@ mod tests {
 
     #[test]
     fn test_update_flags_management() {
-        let mut fd_ctx = FirmwareDeviceContext::new();
+        let mut fd_ctx = new_test_fd_ctx();
 
         let mut flags = UpdateOptionFlags(0);
         flags.set_request_force_update(true);
@@ -1408,7 +1536,7 @@ mod tests {
 
     #[test]
     fn test_component_storage() {
-        let mut fd_ctx = FirmwareDeviceContext::new();
+        let mut fd_ctx = new_test_fd_ctx();
 
         let comp = FirmwareComponent::new(
             0x0A,

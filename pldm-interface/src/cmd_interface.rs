@@ -15,6 +15,7 @@
 use crate::control_context::{ControlContext, CtrlCmdResponder, ProtocolCapability};
 use crate::error::MsgHandlerError;
 use crate::firmware_device::fd_context::FirmwareDeviceContext;
+use crate::firmware_device::fd_ops::FdOps;
 use core::sync::atomic::{AtomicBool, Ordering};
 use pldm_common::codec::PldmCodec;
 use pldm_common::protocol::base::{
@@ -40,16 +41,16 @@ pub(crate) fn generate_failure_response(
     resp.encode(payload).map_err(MsgHandlerError::Codec)
 }
 
-pub struct CmdInterface<'a> {
+pub struct CmdInterface<'a, O: FdOps> {
     pub ctrl_ctx: ControlContext<'a>,
-    pub fd_ctx: FirmwareDeviceContext<'a>,
+    pub fd_ctx: FirmwareDeviceContext<'a, O>,
     busy: AtomicBool,
 }
 
-impl<'a> CmdInterface<'a> {
+impl<'a, O: FdOps> CmdInterface<'a, O> {
     pub fn new(
         protocol_capabilities: &'a [ProtocolCapability],
-        fd_ctx: FirmwareDeviceContext<'a>,
+        fd_ctx: FirmwareDeviceContext<'a, O>,
     ) -> Self {
         let ctrl_ctx = ControlContext::new(protocol_capabilities);
         Self {
