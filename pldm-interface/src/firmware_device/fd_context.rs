@@ -670,7 +670,7 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
                 .cancel_update_component(&self.internal.get_component())
                 .map_err(MsgHandlerError::FdOps)?;
             self.internal.fd_idle_timeout();
-            return Ok(0);
+            return Err(MsgHandlerError::T1Timeout);
         }
 
         Ok(result)
