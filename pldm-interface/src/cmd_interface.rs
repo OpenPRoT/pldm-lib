@@ -71,19 +71,6 @@ impl<'a, O: FdOps> CmdInterface<'a, O> {
         Ok(resp_len)
     }
 
-    pub fn handle_initiator_msg(&mut self, msg_buf: &mut [u8]) -> Result<(), MsgHandlerError> {
-        // Prepare the request payload
-        let payload = construct_mctp_pldm_msg(msg_buf).map_err(MsgHandlerError::Util)?;
-
-        // Generate the request
-        let req_len = self.fd_ctx.fd_progress(payload)?;
-        if req_len == 0 {
-            return Ok(());
-        }
-
-        Ok(())
-    }
-
     pub fn handle_initiator_response(&mut self, msg_buf: &mut [u8]) -> Result<(), MsgHandlerError> {
         // Recieve and parse response
         let payload = extract_pldm_msg(msg_buf).map_err(MsgHandlerError::Util)?;
