@@ -874,7 +874,9 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
 
     fn fd_progress_download(&mut self, payload: &mut [u8]) -> Result<usize, MsgHandlerError> {
         if !self.should_send_fd_request() {
-            return Err(MsgHandlerError::FdInitiatorModeError);
+            // A request is in flight (or nothing is due yet): not an
+            // error, the caller polls again.
+            return Ok(0);
         }
 
         let instance_id = self.internal.alloc_next_instance_id().unwrap();
@@ -947,7 +949,9 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
 
     fn pldm_fd_progress_verify(&mut self, _payload: &mut [u8]) -> Result<usize, MsgHandlerError> {
         if !self.should_send_fd_request() {
-            return Err(MsgHandlerError::FdInitiatorModeError);
+            // A request is in flight (or nothing is due yet): not an
+            // error, the caller polls again.
+            return Ok(0);
         }
 
         let mut res = VerifyResult::default();
@@ -991,7 +995,9 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
 
     fn pldm_fd_progress_apply(&mut self, _payload: &mut [u8]) -> Result<usize, MsgHandlerError> {
         if !self.should_send_fd_request() {
-            return Err(MsgHandlerError::FdInitiatorModeError);
+            // A request is in flight (or nothing is due yet): not an
+            // error, the caller polls again.
+            return Ok(0);
         }
 
         let mut res = ApplyResult::default();
@@ -1605,5 +1611,57 @@ mod tests {
         // The cancelled request is gone: a late UA response to it must be
         // rejected by handle_response's Sent + instance-id guard.
         assert_eq!(fd_ctx.internal.get_fd_req().state, FdReqState::Unused);
+    }
+
+    // A request in flight with T2 not yet elapsed is the normal polling
+    // state: Ok(0), not FdInitiatorModeError.
+    #[test]
+    fn test_fd_progress_waiting_is_not_an_error() {
+        let mut fd_ctx = new_test_fd_ctx();
+        let mut buffer = [0u8; 256];
+        let now = fd_ctx.ops.now();
+
+        fd_ctx.internal.set_fd_state(FirmwareDeviceState::Download);
+        fd_ctx.internal.set_fd_req(
+            FdReqState::Sent,
+            true,
+            Some(TransferResult::TransferSuccess as u8),
+            Some(0),
+            Some(FwUpdateCmd::TransferComplete as u8),
+            Some(now),
+        );
+        fd_ctx.internal.set_fd_t1_update_ts(now);
+
+        assert!(matches!(fd_ctx.fd_progress(&mut buffer), Ok(0)));
+        assert_eq!(
+            fd_ctx.internal.get_fd_state(),
+            FirmwareDeviceState::Download
+        );
+    }
+
+    // T1 must fire in the waiting state too, not only on the T2 resend
+    // path: request in flight, T2 not elapsed, but the last UA response
+    // is older than T1.
+    #[test]
+    fn test_fd_progress_t1_fires_while_waiting() {
+        let mut fd_ctx = new_test_fd_ctx();
+        let mut buffer = [0u8; 256];
+        let now = fd_ctx.ops.now();
+
+        fd_ctx.internal.set_fd_state(FirmwareDeviceState::Download);
+        fd_ctx.internal.set_fd_req(
+            FdReqState::Sent,
+            true,
+            Some(TransferResult::TransferSuccess as u8),
+            Some(0),
+            Some(FwUpdateCmd::TransferComplete as u8),
+            Some(now),
+        );
+        fd_ctx.internal.set_fd_t1_update_ts(0);
+
+        let result = fd_ctx.fd_progress(&mut buffer);
+
+        assert!(matches!(result, Err(MsgHandlerError::T1Timeout)));
+        assert_eq!(fd_ctx.internal.get_fd_state(), FirmwareDeviceState::Idle);
     }
 }

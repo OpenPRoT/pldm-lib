@@ -28,6 +28,19 @@ use pldm_common::util::mctp_transport::{
 
 pub type PldmCompletionErrorCode = u8;
 
+/// What the initiator polling loop should do next, as reported by
+/// [`CmdInterface::generate_initiator_request`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InitiatorAction {
+    /// A request was generated: transmit `msg_buf[..n]`.
+    Request(usize),
+    /// Nothing due — a request is in flight or the current operation is
+    /// still running. Poll again.
+    Waiting,
+    /// The FD left initiator mode; stop polling.
+    Complete,
+}
+
 // Helper function to write a failure response message into payload
 pub(crate) fn generate_failure_response(
     payload: &mut [u8],
@@ -76,17 +89,31 @@ impl<'a, O: FdOps> CmdInterface<'a, O> {
     /// Sets the MCTP message-type byte at `msg_buf[0]` and writes the PLDM
     /// request starting at `msg_buf[1]`.
     ///
-    /// Returns `Ok(None)` when no request is pending (nothing to send).
-    /// Returns `Ok(Some(n))` where `n` is the total number of bytes written
-    /// to `msg_buf` (1 MCTP header byte + `n - 1` PLDM bytes) when a request
-    /// was generated.
+    /// Returns [`InitiatorAction::Request`]`(n)` when a request was
+    /// generated; transmit `msg_buf[..n]` (1 MCTP header byte plus the
+    /// encoded PLDM request). [`InitiatorAction::Waiting`] means nothing is
+    /// due yet — poll again. [`InitiatorAction::Complete`] means the FD
+    /// left initiator mode — stop polling.
+    ///
+    /// # Errors
+    ///
+    /// `T1Timeout`: no UA response arrived within T1 — the update was
+    /// cancelled and the FD is back in Idle. A protocol outcome to report,
+    /// not a transport fault to retry; the next poll returns `Complete`.
     pub fn generate_initiator_request(
         &mut self,
         msg_buf: &mut [u8],
-    ) -> Result<Option<usize>, MsgHandlerError> {
+    ) -> Result<InitiatorAction, MsgHandlerError> {
+        if self.fd_ctx.should_stop_initiator_mode() {
+            return Ok(InitiatorAction::Complete);
+        }
         let payload = construct_mctp_pldm_msg(msg_buf).map_err(MsgHandlerError::Util)?;
         let pldm_len = self.fd_ctx.fd_progress(payload)?;
-        Ok((pldm_len > 0).then_some(pldm_len))
+        Ok(if pldm_len > 0 {
+            InitiatorAction::Request(pldm_len + PLDM_MSG_OFFSET)
+        } else {
+            InitiatorAction::Waiting
+        })
     }
 
     /// Process a received FD-initiated PLDM response from `msg_buf`.
