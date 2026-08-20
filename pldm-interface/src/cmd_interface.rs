@@ -71,16 +71,6 @@ impl<'a, O: FdOps> CmdInterface<'a, O> {
         Ok(resp_len)
     }
 
-    pub fn handle_initiator_response(&mut self, msg_buf: &mut [u8]) -> Result<(), MsgHandlerError> {
-        // Recieve and parse response
-        let payload = extract_pldm_msg(msg_buf).map_err(MsgHandlerError::Util)?;
-
-        // Handle the response
-        self.fd_ctx.handle_response(payload)?;
-
-        Ok(())
-    }
-
     /// Generate the next FD-initiated PLDM request into `msg_buf`.
     ///
     /// Sets the MCTP message-type byte at `msg_buf[0]` and writes the PLDM
