@@ -99,17 +99,17 @@ impl<'a, O: FdOps> CmdInterface<'a, O> {
     /// Sets the MCTP message-type byte at `msg_buf[0]` and writes the PLDM
     /// request starting at `msg_buf[1]`.
     ///
-    /// Returns `Ok(0)` when no request is pending (nothing to send).
-    /// Returns `Ok(n)` where `n` is the total number of bytes written to
-    /// `msg_buf` (1 MCTP header byte + `n - 1` PLDM bytes) when a request
+    /// Returns `Ok(None)` when no request is pending (nothing to send).
+    /// Returns `Ok(Some(n))` where `n` is the total number of bytes written
+    /// to `msg_buf` (1 MCTP header byte + `n - 1` PLDM bytes) when a request
     /// was generated.
     pub fn generate_initiator_request(
         &mut self,
         msg_buf: &mut [u8],
-    ) -> Result<usize, MsgHandlerError> {
+    ) -> Result<Option<usize>, MsgHandlerError> {
         let payload = construct_mctp_pldm_msg(msg_buf).map_err(MsgHandlerError::Util)?;
         let pldm_len = self.fd_ctx.fd_progress(payload)?;
-        Ok(pldm_len)
+        Ok((pldm_len > 0).then_some(pldm_len))
     }
 
     /// Process a received FD-initiated PLDM response from `msg_buf`.
