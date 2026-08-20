@@ -658,13 +658,27 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
             _ => Err(MsgHandlerError::FdInitiatorModeError),
         }?;
 
+        // Verify/apply may block for extended periods inside FdOps, so
+        // refresh T1 after their progress calls: local work is not UA
+        // silence. Skip the refresh once VerifyComplete/ApplyComplete is
+        // sent - from then on T1 times the UA's response, and resetting
+        // it here would let a silent UA escape the timeout.
+        if (fd_state == FirmwareDeviceState::Verify || fd_state == FirmwareDeviceState::Apply)
+            && self.internal.get_fd_req_state() != FdReqState::Sent
+        {
+            self.set_fd_t1_ts();
+        }
+
         // If a response is not received within T1 in FD-driven states, cancel the update and transition to idle state.
+        let elapsed = self
+            .ops
+            .now()
+            .saturating_sub(self.internal.get_fd_t1_update_ts());
         if (fd_state == FirmwareDeviceState::Download
             || fd_state == FirmwareDeviceState::Verify
             || fd_state == FirmwareDeviceState::Apply)
             && self.internal.get_fd_req_state() == FdReqState::Sent
-            && self.ops.now() - self.internal.get_fd_t1_update_ts()
-                > self.internal.get_fd_t1_timeout()
+            && elapsed > self.internal.get_fd_t1_timeout()
         {
             self.ops
                 .cancel_update_component(&self.internal.get_component())
