@@ -89,6 +89,15 @@ impl<'a, O: FdOps> CmdInterface<'a, O> {
     /// Sets the MCTP message-type byte at `msg_buf[0]` and writes the PLDM
     /// request starting at `msg_buf[1]`.
     ///
+    /// `msg_buf` is a scratch frame buffer, not an output on success only:
+    /// the message-type byte is stamped before it is known whether anything
+    /// is due, so the buffer is mutated even on [`Waiting`], and a buffer
+    /// too short for an MCTP frame is an error on every poll. Callers must
+    /// not read `msg_buf` unless [`Request`]`(n)` was returned.
+    ///
+    /// [`Waiting`]: InitiatorAction::Waiting
+    /// [`Request`]: InitiatorAction::Request
+    ///
     /// Returns [`InitiatorAction::Request`]`(n)` when a request was
     /// generated; transmit `msg_buf[..n]` (1 MCTP header byte plus the
     /// encoded PLDM request). [`InitiatorAction::Waiting`] means nothing is
