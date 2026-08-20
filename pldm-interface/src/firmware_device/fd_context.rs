@@ -1554,4 +1554,33 @@ mod tests {
         assert_eq!(stored_comp.comp_identifier, 0x01);
         assert_eq!(stored_comp.comp_comparison_stamp, 0x12345678);
     }
+
+    #[test]
+    fn test_fd_progress_t1_timeout_cancels_update() {
+        let mut fd_ctx = new_test_fd_ctx();
+        let mut buffer = [0u8; 256];
+
+        // A completed transfer whose TransferComplete was sent long ago:
+        // T2 has elapsed (so fd_progress_download resends) and the last
+        // UA response is older than T1.
+        fd_ctx.internal.set_fd_state(FirmwareDeviceState::Download);
+        fd_ctx.internal.set_fd_req(
+            FdReqState::Sent,
+            true,
+            Some(TransferResult::TransferSuccess as u8),
+            Some(0),
+            Some(FwUpdateCmd::TransferComplete as u8),
+            Some(0),
+        );
+        fd_ctx.internal.set_fd_t1_update_ts(0);
+
+        let result = fd_ctx.fd_progress(&mut buffer);
+
+        assert!(matches!(result, Err(MsgHandlerError::T1Timeout)));
+        assert_eq!(fd_ctx.internal.get_fd_state(), FirmwareDeviceState::Idle);
+        assert_eq!(
+            fd_ctx.internal.get_fd_reason(),
+            Some(GetStatusReasonCode::DownloadTimeout)
+        );
+    }
 }
