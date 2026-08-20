@@ -684,6 +684,11 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
                 .cancel_update_component(&self.internal.get_component())
                 .map_err(MsgHandlerError::FdOps)?;
             self.internal.fd_idle_timeout();
+            // Sent must not survive the cancel: handle_response matches on
+            // Sent + instance id, so a late UA response to the cancelled
+            // request would still be accepted and processed while Idle.
+            self.internal
+                .set_fd_req(FdReqState::Unused, false, None, None, None, None);
             return Err(MsgHandlerError::T1Timeout);
         }
 
@@ -1596,5 +1601,9 @@ mod tests {
             fd_ctx.internal.get_fd_reason(),
             Some(GetStatusReasonCode::DownloadTimeout)
         );
+
+        // The cancelled request is gone: a late UA response to it must be
+        // rejected by handle_response's Sent + instance-id guard.
+        assert_eq!(fd_ctx.internal.get_fd_req().state, FdReqState::Unused);
     }
 }
