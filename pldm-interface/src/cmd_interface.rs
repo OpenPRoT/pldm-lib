@@ -37,8 +37,10 @@ pub enum InitiatorAction {
     /// Nothing due — a request is in flight or the current operation is
     /// still running. Poll again.
     Waiting,
-    /// The FD left initiator mode; stop polling.
-    Complete,
+    /// The FD left initiator mode; stop polling. Deliberately carries no
+    /// reason — whether the update finished or was cancelled (e.g. T1
+    /// timeout), the UA learns why via GetStatus (GetStatusReasonCode).
+    Idle,
 }
 
 // Helper function to write a failure response message into payload
@@ -101,20 +103,20 @@ impl<'a, O: FdOps> CmdInterface<'a, O> {
     /// Returns [`InitiatorAction::Request`]`(n)` when a request was
     /// generated; transmit `msg_buf[..n]` (1 MCTP header byte plus the
     /// encoded PLDM request). [`InitiatorAction::Waiting`] means nothing is
-    /// due yet — poll again. [`InitiatorAction::Complete`] means the FD
+    /// due yet — poll again. [`InitiatorAction::Idle`] means the FD
     /// left initiator mode — stop polling.
     ///
     /// # Errors
     ///
     /// `T1Timeout`: no UA response arrived within T1 — the update was
     /// cancelled and the FD is back in Idle. A protocol outcome to report,
-    /// not a transport fault to retry; the next poll returns `Complete`.
+    /// not a transport fault to retry; the next poll returns `Idle`.
     pub fn generate_initiator_request(
         &mut self,
         msg_buf: &mut [u8],
     ) -> Result<InitiatorAction, MsgHandlerError> {
         if self.fd_ctx.should_stop_initiator_mode() {
-            return Ok(InitiatorAction::Complete);
+            return Ok(InitiatorAction::Idle);
         }
         let payload = construct_mctp_pldm_msg(msg_buf).map_err(MsgHandlerError::Util)?;
         let pldm_len = self.fd_ctx.fd_progress(payload)?;
