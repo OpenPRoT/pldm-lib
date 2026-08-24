@@ -662,14 +662,23 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
         // refresh T1 after their progress calls: local work is not UA
         // silence. Skip the refresh once VerifyComplete/ApplyComplete is
         // sent - from then on T1 times the UA's response, and resetting
-        // it here would let a silent UA escape the timeout.
+        // it here would let a silent UA escape the timeout. Skip it in
+        // Failed too: there the FD is waiting for the UA's CancelUpdate,
+        // which is UA silence as well.
         if (fd_state == FirmwareDeviceState::Verify || fd_state == FirmwareDeviceState::Apply)
-            && self.internal.get_fd_req_state() != FdReqState::Sent
+            && !matches!(
+                self.internal.get_fd_req_state(),
+                FdReqState::Sent | FdReqState::Failed
+            )
         {
             self.set_fd_t1_ts();
         }
 
-        // If a response is not received within T1 in FD-driven states, cancel the update and transition to idle state.
+        // If the UA stays silent for T1 in FD-driven states, cancel the
+        // update and transition to idle. Sent times the response to an
+        // outstanding request; Failed times the CancelUpdate the UA owes
+        // after a failed transfer/verify/apply - without it a silent UA
+        // would leave the caller polling Waiting forever.
         let elapsed = self
             .ops
             .now()
@@ -677,7 +686,10 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
         if (fd_state == FirmwareDeviceState::Download
             || fd_state == FirmwareDeviceState::Verify
             || fd_state == FirmwareDeviceState::Apply)
-            && self.internal.get_fd_req_state() == FdReqState::Sent
+            && matches!(
+                self.internal.get_fd_req_state(),
+                FdReqState::Sent | FdReqState::Failed
+            )
             && elapsed > self.internal.get_fd_t1_timeout()
         {
             self.ops
@@ -1663,5 +1675,63 @@ mod tests {
 
         assert!(matches!(result, Err(MsgHandlerError::T1Timeout)));
         assert_eq!(fd_ctx.internal.get_fd_state(), FirmwareDeviceState::Idle);
+    }
+
+    // After a failed transfer the FD sits in FdReqState::Failed waiting
+    // for the UA's CancelUpdate. A UA that never sends it must not leave
+    // the caller polling forever: T1 fires in Failed too.
+    #[test]
+    fn test_fd_progress_t1_fires_in_failed_state() {
+        let mut fd_ctx = new_test_fd_ctx();
+        let mut buffer = [0u8; 256];
+
+        fd_ctx.internal.set_fd_state(FirmwareDeviceState::Download);
+        fd_ctx.internal.set_fd_req(
+            FdReqState::Failed,
+            true,
+            Some(TransferResult::FdAbortedTransfer as u8),
+            None,
+            None,
+            None,
+        );
+        fd_ctx.internal.set_fd_t1_update_ts(0);
+
+        let result = fd_ctx.fd_progress(&mut buffer);
+
+        assert!(matches!(result, Err(MsgHandlerError::T1Timeout)));
+        assert_eq!(fd_ctx.internal.get_fd_state(), FirmwareDeviceState::Idle);
+        assert_eq!(
+            fd_ctx.internal.get_fd_reason(),
+            Some(GetStatusReasonCode::DownloadTimeout)
+        );
+        assert_eq!(fd_ctx.internal.get_fd_req().state, FdReqState::Unused);
+    }
+
+    // Same in Verify: the pre-check T1 refresh (local verify work is not
+    // UA silence) must not run in Failed, or the timeout never elapses.
+    #[test]
+    fn test_fd_progress_t1_fires_in_failed_state_verify() {
+        let mut fd_ctx = new_test_fd_ctx();
+        let mut buffer = [0u8; 256];
+
+        fd_ctx.internal.set_fd_state(FirmwareDeviceState::Verify);
+        fd_ctx.internal.set_fd_req(
+            FdReqState::Failed,
+            true,
+            Some(VerifyResult::VerifyGenericError as u8),
+            None,
+            None,
+            None,
+        );
+        fd_ctx.internal.set_fd_t1_update_ts(0);
+
+        let result = fd_ctx.fd_progress(&mut buffer);
+
+        assert!(matches!(result, Err(MsgHandlerError::T1Timeout)));
+        assert_eq!(fd_ctx.internal.get_fd_state(), FirmwareDeviceState::Idle);
+        assert_eq!(
+            fd_ctx.internal.get_fd_reason(),
+            Some(GetStatusReasonCode::VerifyTimeout)
+        );
     }
 }
