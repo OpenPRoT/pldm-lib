@@ -658,18 +658,37 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
             _ => Err(MsgHandlerError::FdInitiatorModeError),
         }?;
 
+        // Verify/apply may block for extended periods inside FdOps, so
+        // refresh T1 after their progress calls: local work is not UA
+        // silence. Skip the refresh once VerifyComplete/ApplyComplete is
+        // sent - from then on T1 times the UA's response, and resetting
+        // it here would let a silent UA escape the timeout.
+        if (fd_state == FirmwareDeviceState::Verify || fd_state == FirmwareDeviceState::Apply)
+            && self.internal.get_fd_req_state() != FdReqState::Sent
+        {
+            self.set_fd_t1_ts();
+        }
+
         // If a response is not received within T1 in FD-driven states, cancel the update and transition to idle state.
+        let elapsed = self
+            .ops
+            .now()
+            .saturating_sub(self.internal.get_fd_t1_update_ts());
         if (fd_state == FirmwareDeviceState::Download
             || fd_state == FirmwareDeviceState::Verify
             || fd_state == FirmwareDeviceState::Apply)
             && self.internal.get_fd_req_state() == FdReqState::Sent
-            && self.ops.now() - self.internal.get_fd_t1_update_ts()
-                > self.internal.get_fd_t1_timeout()
+            && elapsed > self.internal.get_fd_t1_timeout()
         {
             self.ops
                 .cancel_update_component(&self.internal.get_component())
                 .map_err(MsgHandlerError::FdOps)?;
             self.internal.fd_idle_timeout();
+            // Sent must not survive the cancel: handle_response matches on
+            // Sent + instance id, so a late UA response to the cancelled
+            // request would still be accepted and processed while Idle.
+            self.internal
+                .set_fd_req(FdReqState::Unused, false, None, None, None, None);
             return Err(MsgHandlerError::T1Timeout);
         }
 
@@ -1553,5 +1572,38 @@ mod tests {
         let stored_comp = fd_ctx.internal.get_component();
         assert_eq!(stored_comp.comp_identifier, 0x01);
         assert_eq!(stored_comp.comp_comparison_stamp, 0x12345678);
+    }
+
+    #[test]
+    fn test_fd_progress_t1_timeout_cancels_update() {
+        let mut fd_ctx = new_test_fd_ctx();
+        let mut buffer = [0u8; 256];
+
+        // A completed transfer whose TransferComplete was sent long ago:
+        // T2 has elapsed (so fd_progress_download resends) and the last
+        // UA response is older than T1.
+        fd_ctx.internal.set_fd_state(FirmwareDeviceState::Download);
+        fd_ctx.internal.set_fd_req(
+            FdReqState::Sent,
+            true,
+            Some(TransferResult::TransferSuccess as u8),
+            Some(0),
+            Some(FwUpdateCmd::TransferComplete as u8),
+            Some(0),
+        );
+        fd_ctx.internal.set_fd_t1_update_ts(0);
+
+        let result = fd_ctx.fd_progress(&mut buffer);
+
+        assert!(matches!(result, Err(MsgHandlerError::T1Timeout)));
+        assert_eq!(fd_ctx.internal.get_fd_state(), FirmwareDeviceState::Idle);
+        assert_eq!(
+            fd_ctx.internal.get_fd_reason(),
+            Some(GetStatusReasonCode::DownloadTimeout)
+        );
+
+        // The cancelled request is gone: a late UA response to it must be
+        // rejected by handle_response's Sent + instance-id guard.
+        assert_eq!(fd_ctx.internal.get_fd_req().state, FdReqState::Unused);
     }
 }
