@@ -69,6 +69,20 @@ use crate::firmware_device::fd_internal::{
     ApplyState, DownloadState, InitiatorModeState, VerifyState,
 };
 
+/// Outcome of one [`FirmwareDeviceContext::fd_progress`] poll.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FdProgress {
+    /// A request of `n` PLDM bytes was written into the payload.
+    Request(usize),
+    /// Nothing due — a request is in flight or the current operation is
+    /// still running.
+    Waiting,
+    /// The UA stayed silent for T1: the update was cancelled and the FD is
+    /// back in Idle. A protocol outcome, not a fault — reported once; the
+    /// FD is no longer in an initiator-mode state afterwards.
+    Cancelled,
+}
+
 pub struct FirmwareDeviceContext<'a, O: FdOps> {
     ops: &'a O,
     internal: FdInternal,
@@ -648,7 +662,7 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
         )
     }
 
-    pub fn fd_progress(&mut self, payload: &mut [u8]) -> Result<usize, MsgHandlerError> {
+    pub fn fd_progress(&mut self, payload: &mut [u8]) -> Result<FdProgress, MsgHandlerError> {
         let fd_state = self.internal.get_fd_state();
 
         let result = match fd_state {
@@ -701,10 +715,14 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
             // request would still be accepted and processed while Idle.
             self.internal
                 .set_fd_req(FdReqState::Unused, false, None, None, None, None);
-            return Err(MsgHandlerError::T1Timeout);
+            return Ok(FdProgress::Cancelled);
         }
 
-        Ok(result)
+        Ok(if result > 0 {
+            FdProgress::Request(result)
+        } else {
+            FdProgress::Waiting
+        })
     }
 
     pub fn handle_response(&mut self, payload: &mut [u8]) -> Result<(), MsgHandlerError> {
@@ -1613,7 +1631,7 @@ mod tests {
 
         let result = fd_ctx.fd_progress(&mut buffer);
 
-        assert!(matches!(result, Err(MsgHandlerError::T1Timeout)));
+        assert!(matches!(result, Ok(FdProgress::Cancelled)));
         assert_eq!(fd_ctx.internal.get_fd_state(), FirmwareDeviceState::Idle);
         assert_eq!(
             fd_ctx.internal.get_fd_reason(),
@@ -1626,7 +1644,7 @@ mod tests {
     }
 
     // A request in flight with T2 not yet elapsed is the normal polling
-    // state: Ok(0), not FdInitiatorModeError.
+    // state: Waiting, not FdInitiatorModeError.
     #[test]
     fn test_fd_progress_waiting_is_not_an_error() {
         let mut fd_ctx = new_test_fd_ctx();
@@ -1644,7 +1662,10 @@ mod tests {
         );
         fd_ctx.internal.set_fd_t1_update_ts(now);
 
-        assert!(matches!(fd_ctx.fd_progress(&mut buffer), Ok(0)));
+        assert!(matches!(
+            fd_ctx.fd_progress(&mut buffer),
+            Ok(FdProgress::Waiting)
+        ));
         assert_eq!(
             fd_ctx.internal.get_fd_state(),
             FirmwareDeviceState::Download
@@ -1673,7 +1694,7 @@ mod tests {
 
         let result = fd_ctx.fd_progress(&mut buffer);
 
-        assert!(matches!(result, Err(MsgHandlerError::T1Timeout)));
+        assert!(matches!(result, Ok(FdProgress::Cancelled)));
         assert_eq!(fd_ctx.internal.get_fd_state(), FirmwareDeviceState::Idle);
     }
 
@@ -1698,7 +1719,7 @@ mod tests {
 
         let result = fd_ctx.fd_progress(&mut buffer);
 
-        assert!(matches!(result, Err(MsgHandlerError::T1Timeout)));
+        assert!(matches!(result, Ok(FdProgress::Cancelled)));
         assert_eq!(fd_ctx.internal.get_fd_state(), FirmwareDeviceState::Idle);
         assert_eq!(
             fd_ctx.internal.get_fd_reason(),
@@ -1727,7 +1748,7 @@ mod tests {
 
         let result = fd_ctx.fd_progress(&mut buffer);
 
-        assert!(matches!(result, Err(MsgHandlerError::T1Timeout)));
+        assert!(matches!(result, Ok(FdProgress::Cancelled)));
         assert_eq!(fd_ctx.internal.get_fd_state(), FirmwareDeviceState::Idle);
         assert_eq!(
             fd_ctx.internal.get_fd_reason(),

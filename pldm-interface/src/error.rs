@@ -25,5 +25,4 @@ pub enum MsgHandlerError {
     FdOps(FdOpsError),
     FdInitiatorModeError,
     NotReady,
-    T1Timeout,
 }

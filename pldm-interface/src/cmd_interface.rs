@@ -14,7 +14,7 @@
 
 use crate::control_context::{ControlContext, CtrlCmdResponder, ProtocolCapability};
 use crate::error::MsgHandlerError;
-use crate::firmware_device::fd_context::FirmwareDeviceContext;
+use crate::firmware_device::fd_context::{FdProgress, FirmwareDeviceContext};
 use crate::firmware_device::fd_ops::FdOps;
 use core::sync::atomic::{AtomicBool, Ordering};
 use pldm_common::codec::PldmCodec;
@@ -37,9 +37,15 @@ pub enum InitiatorAction {
     /// Nothing due — a request is in flight or the current operation is
     /// still running. Poll again.
     Waiting,
+    /// No UA response arrived within T1: the update was cancelled and the
+    /// FD is back in Idle. Reported once, on the poll that detects the
+    /// timeout; the next poll returns [`Idle`](InitiatorAction::Idle). A
+    /// protocol outcome for the caller to report, not a fault to retry —
+    /// keep serving responder commands so the UA can still GetStatus.
+    Cancelled,
     /// The FD left initiator mode; stop polling. Deliberately carries no
-    /// reason — whether the update finished or was cancelled (e.g. T1
-    /// timeout), the UA learns why via GetStatus (GetStatusReasonCode).
+    /// reason — whether the update finished or was cancelled, the UA
+    /// learns why via GetStatus (GetStatusReasonCode).
     Idle,
 }
 
@@ -103,14 +109,13 @@ impl<'a, O: FdOps> CmdInterface<'a, O> {
     /// Returns [`InitiatorAction::Request`]`(n)` when a request was
     /// generated; transmit `msg_buf[..n]` (1 MCTP header byte plus the
     /// encoded PLDM request). [`InitiatorAction::Waiting`] means nothing is
-    /// due yet — poll again. [`InitiatorAction::Idle`] means the FD
-    /// left initiator mode — stop polling.
+    /// due yet — poll again. [`InitiatorAction::Cancelled`] means the UA
+    /// stayed silent for T1 and the update was cancelled — report it and
+    /// keep serving. [`InitiatorAction::Idle`] means the FD left initiator
+    /// mode — stop polling.
     ///
-    /// # Errors
-    ///
-    /// `T1Timeout`: no UA response arrived within T1 — the update was
-    /// cancelled and the FD is back in Idle. A protocol outcome to report,
-    /// not a transport fault to retry; the next poll returns `Idle`.
+    /// Errors are faults (codec, transport, FdOps); protocol outcomes are
+    /// all in [`InitiatorAction`].
     pub fn generate_initiator_request(
         &mut self,
         msg_buf: &mut [u8],
@@ -119,11 +124,10 @@ impl<'a, O: FdOps> CmdInterface<'a, O> {
             return Ok(InitiatorAction::Idle);
         }
         let payload = construct_mctp_pldm_msg(msg_buf).map_err(MsgHandlerError::Util)?;
-        let pldm_len = self.fd_ctx.fd_progress(payload)?;
-        Ok(if pldm_len > 0 {
-            InitiatorAction::Request(pldm_len + PLDM_MSG_OFFSET)
-        } else {
-            InitiatorAction::Waiting
+        Ok(match self.fd_ctx.fd_progress(payload)? {
+            FdProgress::Request(pldm_len) => InitiatorAction::Request(pldm_len + PLDM_MSG_OFFSET),
+            FdProgress::Waiting => InitiatorAction::Waiting,
+            FdProgress::Cancelled => InitiatorAction::Cancelled,
         })
     }
 
