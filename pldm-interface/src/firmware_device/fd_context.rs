@@ -656,6 +656,36 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
 
     pub fn fd_progress(&mut self, payload: &mut [u8]) -> Result<usize, MsgHandlerError> {
         let fd_state = self.internal.get_fd_state();
+        if !matches!(
+            fd_state,
+            FirmwareDeviceState::Download
+                | FirmwareDeviceState::Verify
+                | FirmwareDeviceState::Apply
+        ) {
+            return Err(MsgHandlerError::FdInitiatorModeError);
+        }
+
+        // T1 is checked before the progress call because the progress helpers
+        // return early while the T2 retry time has not elapsed. Checking after
+        // them would only time out a silent UA on the calls that also resend.
+        if self.internal.get_fd_req_state() == FdReqState::Sent {
+            let elapsed = self
+                .ops
+                .now()
+                .saturating_sub(self.internal.get_fd_t1_update_ts());
+            if elapsed > self.internal.get_fd_t1_timeout() {
+                self.ops
+                    .cancel_update_component(&self.internal.get_component())
+                    .map_err(MsgHandlerError::FdOps)?;
+                self.internal.fd_idle_timeout();
+                // Sent must not survive the cancel: handle_response matches on
+                // Sent + instance id, so a late UA response to the cancelled
+                // request would still be accepted and processed while Idle.
+                self.internal
+                    .set_fd_req(FdReqState::Unused, false, None, None, None, None);
+                return Err(MsgHandlerError::T1Timeout);
+            }
+        }
 
         let result = match fd_state {
             FirmwareDeviceState::Download => self.fd_progress_download(payload),
@@ -673,29 +703,6 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
             && self.internal.get_fd_req_state() != FdReqState::Sent
         {
             self.set_fd_t1_ts();
-        }
-
-        // If a response is not received within T1 in FD-driven states, cancel the update and transition to idle state.
-        let elapsed = self
-            .ops
-            .now()
-            .saturating_sub(self.internal.get_fd_t1_update_ts());
-        if (fd_state == FirmwareDeviceState::Download
-            || fd_state == FirmwareDeviceState::Verify
-            || fd_state == FirmwareDeviceState::Apply)
-            && self.internal.get_fd_req_state() == FdReqState::Sent
-            && elapsed > self.internal.get_fd_t1_timeout()
-        {
-            self.ops
-                .cancel_update_component(&self.internal.get_component())
-                .map_err(MsgHandlerError::FdOps)?;
-            self.internal.fd_idle_timeout();
-            // Sent must not survive the cancel: handle_response matches on
-            // Sent + instance id, so a late UA response to the cancelled
-            // request would still be accepted and processed while Idle.
-            self.internal
-                .set_fd_req(FdReqState::Unused, false, None, None, None, None);
-            return Err(MsgHandlerError::T1Timeout);
         }
 
         Ok(result)
@@ -1478,6 +1485,36 @@ mod tests {
             result,
             Err(MsgHandlerError::FdOps(FdOpsError::DeviceIdentifiersError))
         ));
+    }
+
+    #[test]
+    fn test_fd_progress_t1_timeout_fires_while_t2_retry_pending() {
+        let mut fd_ctx = new_test_fd_ctx();
+        let mut buffer = [0u8; 256];
+
+        // TransferComplete was sent at the current time, so T2 has not
+        // elapsed and fd_progress_download would return early, while the last
+        // UA activity is older than T1.
+        fd_ctx.internal.set_fd_state(FirmwareDeviceState::Download);
+        fd_ctx.internal.set_fd_req(
+            FdReqState::Sent,
+            true,
+            Some(TransferResult::TransferSuccess as u8),
+            Some(0),
+            Some(FwUpdateCmd::TransferComplete as u8),
+            Some(crate::config::DEFAULT_FD_T1_TIMEOUT + 1),
+        );
+        fd_ctx.internal.set_fd_t1_update_ts(0);
+
+        let result = fd_ctx.fd_progress(&mut buffer);
+
+        assert!(matches!(result, Err(MsgHandlerError::T1Timeout)));
+        assert_eq!(fd_ctx.internal.get_fd_state(), FirmwareDeviceState::Idle);
+        assert_eq!(
+            fd_ctx.internal.get_fd_reason(),
+            Some(GetStatusReasonCode::DownloadTimeout)
+        );
+        assert_eq!(fd_ctx.internal.get_fd_req().state, FdReqState::Unused);
     }
 
     #[test]
