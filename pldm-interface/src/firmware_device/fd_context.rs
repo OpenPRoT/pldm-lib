@@ -15,7 +15,7 @@
 use crate::cmd_interface::generate_failure_response;
 use crate::error::MsgHandlerError;
 use crate::firmware_device::fd_internal::{FdInternal, FdReqState};
-use crate::firmware_device::fd_ops::{ComponentOperation, FdOps};
+use crate::firmware_device::fd_ops::{ComponentOperation, FdOps, FdOpsError};
 use pldm_common::codec::PldmCodec;
 use pldm_common::message::firmware_update::activate_fw::{
     ActivateFirmwareRequest, ActivateFirmwareResponse,
@@ -99,6 +99,12 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
             .ops
             .get_device_identifiers(&mut device_identifiers)
             .map_err(MsgHandlerError::FdOps)?;
+
+        // A count outside the slice either encodes an entry the platform never
+        // wrote or drops descriptors that do not fit, both silently.
+        if descriptor_cnt == 0 || descriptor_cnt > device_identifiers.len() {
+            return Err(MsgHandlerError::FdOps(FdOpsError::DeviceIdentifiersError));
+        }
 
         // Create the response message
         let resp = QueryDeviceIdentifiersResponse::new(
@@ -1077,9 +1083,18 @@ mod tests {
     };
     use pldm_common::util::fw_component::FirmwareComponent;
 
-    struct TestFdOps;
+    struct TestFdOps {
+        // What get_device_identifiers claims to have written.
+        devid_count: usize,
+    }
 
-    static TEST_FD_OPS: TestFdOps = TestFdOps;
+    static TEST_FD_OPS: TestFdOps = TestFdOps { devid_count: 1 };
+
+    static TEST_FD_OPS_NO_DEVID: TestFdOps = TestFdOps { devid_count: 0 };
+
+    static TEST_FD_OPS_EXTRA_DEVID: TestFdOps = TestFdOps {
+        devid_count: MAX_DESCRIPTORS_COUNT + 1,
+    };
 
     impl FdOps for TestFdOps {
         fn get_device_identifiers(
@@ -1089,7 +1104,7 @@ mod tests {
             if let Some(first) = device_identifiers.first_mut() {
                 *first = Descriptor::default();
             }
-            Ok(1)
+            Ok(self.devid_count)
         }
 
         fn get_firmware_parms(
@@ -1201,6 +1216,10 @@ mod tests {
 
     fn new_test_fd_ctx() -> FirmwareDeviceContext<'static, TestFdOps> {
         FirmwareDeviceContext::new(&TEST_FD_OPS)
+    }
+
+    fn fd_ctx_with(ops: &'static TestFdOps) -> FirmwareDeviceContext<'static, TestFdOps> {
+        FirmwareDeviceContext::new(ops)
     }
 
     #[test]
@@ -1425,6 +1444,40 @@ mod tests {
             completion_code,
             FwUpdateCompletionCode::NotInUpdateMode as u8
         );
+    }
+
+    #[test]
+    fn test_query_devid_rsp_rejects_zero_descriptor_count() {
+        let fd_ctx = fd_ctx_with(&TEST_FD_OPS_NO_DEVID);
+        let mut buffer = [0u8; 256];
+
+        let req = QueryDeviceIdentifiersRequest::new(0x01, PldmMsgType::Request);
+        req.encode(&mut buffer).unwrap();
+
+        // Without the count check the response would carry the untouched
+        // first slot as the initial descriptor.
+        let result = fd_ctx.query_devid_rsp(&mut buffer);
+        assert!(matches!(
+            result,
+            Err(MsgHandlerError::FdOps(FdOpsError::DeviceIdentifiersError))
+        ));
+    }
+
+    #[test]
+    fn test_query_devid_rsp_rejects_descriptor_count_above_slice_len() {
+        let fd_ctx = fd_ctx_with(&TEST_FD_OPS_EXTRA_DEVID);
+        let mut buffer = [0u8; 256];
+
+        let req = QueryDeviceIdentifiersRequest::new(0x01, PldmMsgType::Request);
+        req.encode(&mut buffer).unwrap();
+
+        // Without the count check the descriptors past the slice would be
+        // dropped and the response would still report success.
+        let result = fd_ctx.query_devid_rsp(&mut buffer);
+        assert!(matches!(
+            result,
+            Err(MsgHandlerError::FdOps(FdOpsError::DeviceIdentifiersError))
+        ));
     }
 
     #[test]
