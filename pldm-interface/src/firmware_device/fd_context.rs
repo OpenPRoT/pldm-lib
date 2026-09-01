@@ -548,9 +548,15 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
         let (progress_percent, update_flags) = match cur_state {
             FirmwareDeviceState::Download => {
                 let mut progress = ProgressPercent::default();
-                let _ = self
+                if self
                     .ops
-                    .query_download_progress(&self.internal.get_component(), &mut progress);
+                    .query_download_progress(&self.internal.get_component(), &mut progress)
+                    .is_err()
+                {
+                    // A callback that wrote a percentage and then failed left
+                    // a value that does not describe the download.
+                    progress = ProgressPercent::default();
+                }
                 let update_flags = self.internal.get_update_flags();
                 (progress, update_flags)
             }
@@ -1077,7 +1083,9 @@ mod tests {
     use super::*;
     use pldm_common::message::firmware_update::activate_fw::SelfContainedActivationRequest;
     use pldm_common::message::firmware_update::apply_complete::ApplyResult;
-    use pldm_common::message::firmware_update::get_status::ProgressPercent;
+    use pldm_common::message::firmware_update::get_status::{
+        ProgressPercent, PROGRESS_PERCENT_NOT_SUPPORTED,
+    };
     use pldm_common::message::firmware_update::request_cancel::{
         NonFunctioningComponentBitmap, NonFunctioningComponentIndication,
     };
@@ -1093,14 +1101,28 @@ mod tests {
     struct TestFdOps {
         // What get_device_identifiers claims to have written.
         devid_count: usize,
+        // Make query_download_progress write a percentage and then fail.
+        progress_fails: bool,
     }
 
-    static TEST_FD_OPS: TestFdOps = TestFdOps { devid_count: 1 };
+    static TEST_FD_OPS: TestFdOps = TestFdOps {
+        devid_count: 1,
+        progress_fails: false,
+    };
 
-    static TEST_FD_OPS_NO_DEVID: TestFdOps = TestFdOps { devid_count: 0 };
+    static TEST_FD_OPS_NO_DEVID: TestFdOps = TestFdOps {
+        devid_count: 0,
+        progress_fails: false,
+    };
 
     static TEST_FD_OPS_EXTRA_DEVID: TestFdOps = TestFdOps {
         devid_count: MAX_DESCRIPTORS_COUNT + 1,
+        progress_fails: false,
+    };
+
+    static TEST_FD_OPS_PROGRESS_FAILS: TestFdOps = TestFdOps {
+        devid_count: 1,
+        progress_fails: true,
     };
 
     impl FdOps for TestFdOps {
@@ -1163,6 +1185,9 @@ mod tests {
             progress_percent: &mut ProgressPercent,
         ) -> Result<(), crate::firmware_device::fd_ops::FdOpsError> {
             *progress_percent = ProgressPercent::new(100).unwrap();
+            if self.progress_fails {
+                return Err(crate::firmware_device::fd_ops::FdOpsError::FwDownloadError);
+            }
             Ok(())
         }
 
@@ -1515,6 +1540,23 @@ mod tests {
             Some(GetStatusReasonCode::DownloadTimeout)
         );
         assert_eq!(fd_ctx.internal.get_fd_req().state, FdReqState::Unused);
+    }
+
+    #[test]
+    fn test_get_status_drops_progress_when_callback_fails() {
+        let mut fd_ctx = fd_ctx_with(&TEST_FD_OPS_PROGRESS_FAILS);
+        let mut buffer = [0u8; 256];
+
+        fd_ctx.internal.set_fd_state(FirmwareDeviceState::Download);
+
+        let req = GetStatusRequest::new(0x0A, PldmMsgType::Request);
+        req.encode(&mut buffer).unwrap();
+        assert!(fd_ctx.get_status_rsp(&mut buffer).is_ok());
+
+        // The callback wrote 100 and then failed, so the response must report
+        // that progress is not supported rather than a complete download.
+        let resp = GetStatusResponse::decode(&buffer).unwrap();
+        assert_eq!(resp.progress_percent, PROGRESS_PERCENT_NOT_SUPPORTED);
     }
 
     #[test]
