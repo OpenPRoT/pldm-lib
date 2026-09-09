@@ -142,7 +142,7 @@ impl<'a, O: FdOps> CmdInterface<'a, O> {
         cmd_opcode: u8,
         payload: &mut [u8],
     ) -> Result<usize, MsgHandlerError> {
-        match PldmControlCmd::try_from(cmd_opcode) {
+        let result = match PldmControlCmd::try_from(cmd_opcode) {
             Ok(cmd) => match cmd {
                 PldmControlCmd::GetTid => self.ctrl_ctx.get_tid_rsp(payload),
                 PldmControlCmd::SetTid => self.ctrl_ctx.set_tid_rsp(payload),
@@ -153,7 +153,12 @@ impl<'a, O: FdOps> CmdInterface<'a, O> {
             Err(_) => {
                 generate_failure_response(payload, PldmBaseCompletionCode::UnsupportedPldmCmd as u8)
             }
-        }
+        };
+
+        // Catch-all: turns an unhandled `Err` (e.g. an FdOps failure with no
+        // specific error path) into a generic failure response instead of
+        // letting it propagate and kill the responder loop.
+        result.or_else(|_| generate_failure_response(payload, PldmBaseCompletionCode::Error as u8))
     }
 
     fn process_fw_update_cmd(
@@ -161,7 +166,7 @@ impl<'a, O: FdOps> CmdInterface<'a, O> {
         cmd_opcode: u8,
         payload: &mut [u8],
     ) -> Result<usize, MsgHandlerError> {
-        match FwUpdateCmd::try_from(cmd_opcode) {
+        let result = match FwUpdateCmd::try_from(cmd_opcode) {
             Ok(cmd) => match cmd {
                 FwUpdateCmd::QueryDeviceIdentifiers => self.fd_ctx.query_devid_rsp(payload),
                 FwUpdateCmd::GetFirmwareParameters => {
@@ -185,7 +190,9 @@ impl<'a, O: FdOps> CmdInterface<'a, O> {
             Err(_) => {
                 generate_failure_response(payload, PldmBaseCompletionCode::UnsupportedPldmCmd as u8)
             }
-        }
+        };
+
+        result.or_else(|_| generate_failure_response(payload, PldmBaseCompletionCode::Error as u8))
     }
 
     fn preprocess_request(
