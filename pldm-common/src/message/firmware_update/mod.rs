@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod activate_fw;
+pub mod activate_pending_component;
 pub mod apply_complete;
 pub mod get_fw_params;
 pub mod get_package_data;

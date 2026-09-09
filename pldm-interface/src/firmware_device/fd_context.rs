@@ -20,6 +20,9 @@ use pldm_common::codec::PldmCodec;
 use pldm_common::message::firmware_update::activate_fw::{
     ActivateFirmwareRequest, ActivateFirmwareResponse,
 };
+use pldm_common::message::firmware_update::activate_pending_component::{
+    ActivatePendingComponentRequest, ActivatePendingComponentResponse,
+};
 use pldm_common::message::firmware_update::get_fw_params::{
     FirmwareParameters, GetFirmwareParametersRequest, GetFirmwareParametersResponse,
 };
@@ -408,6 +411,58 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
                 }
                 Ok(bytes)
             }
+            Err(_) => {
+                generate_failure_response(payload, PldmBaseCompletionCode::InvalidLength as u8)
+            }
+        }
+    }
+
+    pub fn activate_pending_component_rsp(
+        &mut self,
+        payload: &mut [u8],
+    ) -> Result<usize, MsgHandlerError> {
+        // Check if FD is in 'LearnComponents' state. Otherwise returns 'INVALID_STATE' completion code
+        if self.internal.get_fd_state() != FirmwareDeviceState::Idle {
+            return generate_failure_response(
+                payload,
+                FwUpdateCompletionCode::InvalidStateForCommand as u8,
+            );
+        }
+
+        // Decode the request message
+        let req =
+            ActivatePendingComponentRequest::decode(payload).map_err(MsgHandlerError::Codec)?;
+
+        // Construct temporary storage for the component
+        let pass_comp = FirmwareComponent::new(
+            req.comp_classification,
+            req.comp_identifier,
+            req.comp_classification_index,
+            0,
+            PldmFirmwareString::default(),
+            None,
+            None,
+        );
+
+        let mut firmware_params = FirmwareParameters::default();
+        self.ops
+            .get_firmware_parms(&mut firmware_params)
+            .map_err(MsgHandlerError::FdOps)?;
+
+        let est_time_for_activate = self
+            .ops
+            .handle_pending_component(&pass_comp, &firmware_params)
+            .map_err(MsgHandlerError::FdOps)?;
+
+        // Construct response
+        let resp = ActivatePendingComponentResponse::new(
+            req.hdr.instance_id(),
+            PldmBaseCompletionCode::Success as u8,
+            est_time_for_activate,
+        );
+
+        match resp.encode(payload) {
+            Ok(bytes) => Ok(bytes),
             Err(_) => {
                 generate_failure_response(payload, PldmBaseCompletionCode::InvalidLength as u8)
             }
@@ -1175,6 +1230,14 @@ mod tests {
             _component: &FirmwareComponent,
         ) -> Result<(), crate::firmware_device::fd_ops::FdOpsError> {
             Ok(())
+        }
+
+        fn handle_pending_component(
+            &self,
+            _component: &FirmwareComponent,
+            _fw_params: &FirmwareParameters,
+        ) -> Result<u16, crate::firmware_device::fd_ops::FdOpsError> {
+            Ok(0)
         }
 
         fn get_non_functional_component_info(
