@@ -175,6 +175,9 @@ impl PldmCodec for FirmwareParameters {
 
         let mut active_comp_image_set_ver_str = [0u8; PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN];
         let len = params_fixed.active_comp_image_set_ver_str_len as usize;
+        if len > PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN {
+            return Err(PldmCodecError::InvalidData);
+        }
         active_comp_image_set_ver_str[..len].copy_from_slice(
             buffer
                 .get(offset..offset + len)
@@ -187,6 +190,9 @@ impl PldmCodec for FirmwareParameters {
         {
             let mut arr = [0u8; PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN];
             let len = params_fixed.pending_comp_image_set_ver_str_len as usize;
+            if len > PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN {
+                return Err(PldmCodecError::InvalidData);
+            }
             arr[..len].copy_from_slice(
                 buffer
                     .get(offset..offset + len)
