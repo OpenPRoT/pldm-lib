@@ -269,6 +269,6 @@ pub trait FdOps {
     ///
     /// * `PldmFdTime` - The current timestamp in milliseconds.
     fn now(&self) -> PldmFdTime {
-        0xbaddbadd
+        0
     }
 }
