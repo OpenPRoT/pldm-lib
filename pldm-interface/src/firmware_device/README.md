@@ -45,15 +45,13 @@ timeout can take the flow to another state or back to `Idle`.
 
 Every `FdOpsError` is converted to `MsgHandlerError::FdOps` and returned to the
 caller, except for `query_download_progress`: `get_status_rsp` ignores that
-error and leaves whatever the callback wrote in `ProgressPercent`. If the
-callback wrote nothing, that is `ProgressPercent::default()`, which is 101
+error and reports `ProgressPercent::default()`, which is 101
 (`PROGRESS_PERCENT_NOT_SUPPORTED`).
 
 ## `FdOps` callback map
 
-Every required method is implemented by the platform integrating this crate.
-`get_non_functional_component_info` and `now` have defaults, although a real
-device will normally override `now` with a monotonic millisecond clock.
+Every method below has to be implemented by the platform integrating this
+crate, except `get_non_functional_component_info`, which has a default.
 
 ### `get_device_identifiers`
 
@@ -62,8 +60,9 @@ The first returned entry is used as the initial descriptor and any remaining
 entries are encoded as additional descriptors.
 
 Called by `FirmwareDeviceContext::query_devid_rsp` while handling
-`QueryDeviceIdentifiers`. The returned count must fit the provided slice and
-must include at least one descriptor.
+`QueryDeviceIdentifiers`. The count has to be at least 1 and at most the slice
+length (`MAX_DESCRIPTORS_COUNT`, currently 4). Anything else is rejected with
+`FdOpsError::DeviceIdentifiersError`.
 
 ### `get_firmware_parms`
 
@@ -140,8 +139,10 @@ firmware-data request eligible.
 Writes the current download percentage into `ProgressPercent` for status
 reporting.
 
-Called by `get_status_rsp` when the current state is `Download`. Errors from
-this callback are ignored and leave the response at its default progress.
+Called by `get_status_rsp` when the current state is `Download`. An error from
+this callback is ignored and the response reports 101
+(`PROGRESS_PERCENT_NOT_SUPPORTED`), including when the callback wrote a
+percentage before it failed.
 
 ### `verify`
 
@@ -202,10 +203,10 @@ cancelled.
 
 ### `now`
 
-Returns the current time in milliseconds as `PldmFdTime`. Production
-implementations should use a monotonic time source because the context uses
-saturating elapsed-time calculations and rejects retry calculations when time
-moves backwards. The trait's fixed default value is mainly useful as a stub.
+Returns the current time in milliseconds as `PldmFdTime`. The clock has to be
+monotonic: the context uses saturating elapsed-time calculations and rejects
+retry calculations when time moves backwards. There is no default, because a
+clock that stands still turns off both the T1 timeout and T2 retries.
 
 Called throughout `fd_context.rs` to:
 
@@ -221,12 +222,24 @@ Called throughout `fd_context.rs` to:
 The owner of `FirmwareDeviceContext` should use
 `should_start_initiator_mode`/`should_stop_initiator_mode` to coordinate its
 transport loop. While initiator mode is active, call `fd_progress` to obtain the
-next encoded FD request. A return value of zero during verify or apply means
-local work is still progressing and no PLDM message should be sent. Pass a UA
-response to `handle_response`; it accepts only the command and instance ID of
-the currently sent request.
+next encoded FD request. Three returns are normal. A positive length is an
+encoded request to send. `Ok(0)` during verify or apply means local work is
+still progressing and no PLDM message should be sent.
+`Err(MsgHandlerError::FdInitiatorModeError)` usually means there is nothing to
+send yet, because a request is outstanding and the T2 retry time has not
+elapsed, or because the request state is `Unused` or `Failed`. The same error is
+returned when `fd_progress` is called outside `Download`, `Verify` and `Apply`,
+and when the range from `query_download_offset_and_length` is rejected, so the
+return value does not separate a quiet poll from a platform error.
+`Err(MsgHandlerError::T1Timeout)` means the update was cancelled.
+
+Pass a UA response to `handle_response`. It accepts a response only while an FD
+request is outstanding (`FdReqState::Sent`) and the response's command and
+instance ID match that request. Anything else returns
+`MsgHandlerError::FdInitiatorModeError`.
 
 `fd_progress` also handles T2 retries for sent requests and T1 cancellation
-when the UA remains silent. The embedding application is responsible for
-scheduling calls often enough for those timers and platform operations to make
-progress.
+when the UA remains silent. T1 is checked before the retry gate, so a silent UA
+is timed out whether or not a resend is due. The embedding application is
+responsible for scheduling calls often enough for those timers and platform
+operations to make progress.

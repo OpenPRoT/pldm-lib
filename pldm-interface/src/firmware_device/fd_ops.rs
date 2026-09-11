@@ -281,10 +281,13 @@ pub trait FdOps {
 
     /// Retrieves the current timestamp in milliseconds.
     ///
+    /// The clock has to be monotonic. The T1 timeout and the T2 retry time are
+    /// both differences between two `now` values, so a clock that stands still
+    /// disables update mode timeouts and firmware data retries, and a clock
+    /// that jumps backwards suppresses retries until it catches up.
+    ///
     /// # Returns
     ///
     /// * `PldmFdTime` - The current timestamp in milliseconds.
-    fn now(&self) -> PldmFdTime {
-        0
-    }
+    fn now(&self) -> PldmFdTime;
 }
