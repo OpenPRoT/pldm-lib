@@ -52,6 +52,7 @@ pub static PLDM_PROTOCOL_CAPABILITIES: [ProtocolCapability<'static>; PLDM_PROTOC
             FwUpdateCmd::GetStatus as u8,
             FwUpdateCmd::CancelUpdateComponent as u8,
             FwUpdateCmd::CancelUpdate as u8,
+            FwUpdateCmd::ActivatePendingComponentImage as u8,
         ],
     },
 ];

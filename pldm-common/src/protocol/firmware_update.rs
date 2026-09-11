@@ -48,8 +48,8 @@ pub enum FwUpdateCmd {
     GetStatus = 0x1B,
     CancelUpdateComponent = 0x1C,
     CancelUpdate = 0x1D,
-    ActivateComponentImageSet = 0x1E,
-    ActivateComponentImage = 0x1F,
+    ActivatePendingComponentImageSet = 0x1E,
+    ActivatePendingComponentImage = 0x1F,
     GetMetaData = 0x19,
     RequestDownstreamDeviceUpdate = 0x20,
 }
@@ -78,8 +78,8 @@ impl TryFrom<u8> for FwUpdateCmd {
             0x1B => Ok(FwUpdateCmd::GetStatus),
             0x1C => Ok(FwUpdateCmd::CancelUpdateComponent),
             0x1D => Ok(FwUpdateCmd::CancelUpdate),
-            0x1E => Ok(FwUpdateCmd::ActivateComponentImageSet),
-            0x1F => Ok(FwUpdateCmd::ActivateComponentImage),
+            0x1E => Ok(FwUpdateCmd::ActivatePendingComponentImageSet),
+            0x1F => Ok(FwUpdateCmd::ActivatePendingComponentImage),
             0x20 => Ok(FwUpdateCmd::RequestDownstreamDeviceUpdate),
             _ => Err(PldmError::UnsupportedCmd),
         }
