@@ -15,7 +15,7 @@
 use crate::cmd_interface::generate_failure_response;
 use crate::error::MsgHandlerError;
 use crate::firmware_device::fd_internal::{FdInternal, FdReqState};
-use crate::firmware_device::fd_ops::{ComponentOperation, FdOps};
+use crate::firmware_device::fd_ops::{ComponentOperation, FdOps, FdOpsError};
 use pldm_common::codec::PldmCodec;
 use pldm_common::message::firmware_update::activate_fw::{
     ActivateFirmwareRequest, ActivateFirmwareResponse,
@@ -99,6 +99,12 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
             .ops
             .get_device_identifiers(&mut device_identifiers)
             .map_err(MsgHandlerError::FdOps)?;
+
+        // A count outside the slice either encodes an entry the platform never
+        // wrote or drops descriptors that do not fit, both silently.
+        if descriptor_cnt == 0 || descriptor_cnt > device_identifiers.len() {
+            return Err(MsgHandlerError::FdOps(FdOpsError::DeviceIdentifiersError));
+        }
 
         // Create the response message
         let resp = QueryDeviceIdentifiersResponse::new(
@@ -542,9 +548,15 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
         let (progress_percent, update_flags) = match cur_state {
             FirmwareDeviceState::Download => {
                 let mut progress = ProgressPercent::default();
-                let _ = self
+                if self
                     .ops
-                    .query_download_progress(&self.internal.get_component(), &mut progress);
+                    .query_download_progress(&self.internal.get_component(), &mut progress)
+                    .is_err()
+                {
+                    // A callback that wrote a percentage and then failed left
+                    // a value that does not describe the download.
+                    progress = ProgressPercent::default();
+                }
                 let update_flags = self.internal.get_update_flags();
                 (progress, update_flags)
             }
@@ -650,6 +662,36 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
 
     pub fn fd_progress(&mut self, payload: &mut [u8]) -> Result<usize, MsgHandlerError> {
         let fd_state = self.internal.get_fd_state();
+        if !matches!(
+            fd_state,
+            FirmwareDeviceState::Download
+                | FirmwareDeviceState::Verify
+                | FirmwareDeviceState::Apply
+        ) {
+            return Err(MsgHandlerError::FdInitiatorModeError);
+        }
+
+        // T1 is checked before the progress call because the progress helpers
+        // return early while the T2 retry time has not elapsed. Checking after
+        // them would only time out a silent UA on the calls that also resend.
+        if self.internal.get_fd_req_state() == FdReqState::Sent {
+            let elapsed = self
+                .ops
+                .now()
+                .saturating_sub(self.internal.get_fd_t1_update_ts());
+            if elapsed > self.internal.get_fd_t1_timeout() {
+                self.ops
+                    .cancel_update_component(&self.internal.get_component())
+                    .map_err(MsgHandlerError::FdOps)?;
+                self.internal.fd_idle_timeout();
+                // Sent must not survive the cancel: handle_response matches on
+                // Sent + instance id, so a late UA response to the cancelled
+                // request would still be accepted and processed while Idle.
+                self.internal
+                    .set_fd_req(FdReqState::Unused, false, None, None, None, None);
+                return Err(MsgHandlerError::T1Timeout);
+            }
+        }
 
         let result = match fd_state {
             FirmwareDeviceState::Download => self.fd_progress_download(payload),
@@ -667,29 +709,6 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
             && self.internal.get_fd_req_state() != FdReqState::Sent
         {
             self.set_fd_t1_ts();
-        }
-
-        // If a response is not received within T1 in FD-driven states, cancel the update and transition to idle state.
-        let elapsed = self
-            .ops
-            .now()
-            .saturating_sub(self.internal.get_fd_t1_update_ts());
-        if (fd_state == FirmwareDeviceState::Download
-            || fd_state == FirmwareDeviceState::Verify
-            || fd_state == FirmwareDeviceState::Apply)
-            && self.internal.get_fd_req_state() == FdReqState::Sent
-            && elapsed > self.internal.get_fd_t1_timeout()
-        {
-            self.ops
-                .cancel_update_component(&self.internal.get_component())
-                .map_err(MsgHandlerError::FdOps)?;
-            self.internal.fd_idle_timeout();
-            // Sent must not survive the cancel: handle_response matches on
-            // Sent + instance id, so a late UA response to the cancelled
-            // request would still be accepted and processed while Idle.
-            self.internal
-                .set_fd_req(FdReqState::Unused, false, None, None, None, None);
-            return Err(MsgHandlerError::T1Timeout);
         }
 
         Ok(result)
@@ -1064,7 +1083,9 @@ mod tests {
     use super::*;
     use pldm_common::message::firmware_update::activate_fw::SelfContainedActivationRequest;
     use pldm_common::message::firmware_update::apply_complete::ApplyResult;
-    use pldm_common::message::firmware_update::get_status::ProgressPercent;
+    use pldm_common::message::firmware_update::get_status::{
+        ProgressPercent, PROGRESS_PERCENT_NOT_SUPPORTED,
+    };
     use pldm_common::message::firmware_update::request_cancel::{
         NonFunctioningComponentBitmap, NonFunctioningComponentIndication,
     };
@@ -1077,9 +1098,32 @@ mod tests {
     };
     use pldm_common::util::fw_component::FirmwareComponent;
 
-    struct TestFdOps;
+    struct TestFdOps {
+        // What get_device_identifiers claims to have written.
+        devid_count: usize,
+        // Make query_download_progress write a percentage and then fail.
+        progress_fails: bool,
+    }
 
-    static TEST_FD_OPS: TestFdOps = TestFdOps;
+    static TEST_FD_OPS: TestFdOps = TestFdOps {
+        devid_count: 1,
+        progress_fails: false,
+    };
+
+    static TEST_FD_OPS_NO_DEVID: TestFdOps = TestFdOps {
+        devid_count: 0,
+        progress_fails: false,
+    };
+
+    static TEST_FD_OPS_EXTRA_DEVID: TestFdOps = TestFdOps {
+        devid_count: MAX_DESCRIPTORS_COUNT + 1,
+        progress_fails: false,
+    };
+
+    static TEST_FD_OPS_PROGRESS_FAILS: TestFdOps = TestFdOps {
+        devid_count: 1,
+        progress_fails: true,
+    };
 
     impl FdOps for TestFdOps {
         fn get_device_identifiers(
@@ -1089,7 +1133,7 @@ mod tests {
             if let Some(first) = device_identifiers.first_mut() {
                 *first = Descriptor::default();
             }
-            Ok(1)
+            Ok(self.devid_count)
         }
 
         fn get_firmware_parms(
@@ -1141,6 +1185,9 @@ mod tests {
             progress_percent: &mut ProgressPercent,
         ) -> Result<(), crate::firmware_device::fd_ops::FdOpsError> {
             *progress_percent = ProgressPercent::new(100).unwrap();
+            if self.progress_fails {
+                return Err(crate::firmware_device::fd_ops::FdOpsError::FwDownloadError);
+            }
             Ok(())
         }
 
@@ -1201,6 +1248,10 @@ mod tests {
 
     fn new_test_fd_ctx() -> FirmwareDeviceContext<'static, TestFdOps> {
         FirmwareDeviceContext::new(&TEST_FD_OPS)
+    }
+
+    fn fd_ctx_with(ops: &'static TestFdOps) -> FirmwareDeviceContext<'static, TestFdOps> {
+        FirmwareDeviceContext::new(ops)
     }
 
     #[test]
@@ -1425,6 +1476,87 @@ mod tests {
             completion_code,
             FwUpdateCompletionCode::NotInUpdateMode as u8
         );
+    }
+
+    #[test]
+    fn test_query_devid_rsp_rejects_zero_descriptor_count() {
+        let fd_ctx = fd_ctx_with(&TEST_FD_OPS_NO_DEVID);
+        let mut buffer = [0u8; 256];
+
+        let req = QueryDeviceIdentifiersRequest::new(0x01, PldmMsgType::Request);
+        req.encode(&mut buffer).unwrap();
+
+        // Without the count check the response would carry the untouched
+        // first slot as the initial descriptor.
+        let result = fd_ctx.query_devid_rsp(&mut buffer);
+        assert!(matches!(
+            result,
+            Err(MsgHandlerError::FdOps(FdOpsError::DeviceIdentifiersError))
+        ));
+    }
+
+    #[test]
+    fn test_query_devid_rsp_rejects_descriptor_count_above_slice_len() {
+        let fd_ctx = fd_ctx_with(&TEST_FD_OPS_EXTRA_DEVID);
+        let mut buffer = [0u8; 256];
+
+        let req = QueryDeviceIdentifiersRequest::new(0x01, PldmMsgType::Request);
+        req.encode(&mut buffer).unwrap();
+
+        // Without the count check the descriptors past the slice would be
+        // dropped and the response would still report success.
+        let result = fd_ctx.query_devid_rsp(&mut buffer);
+        assert!(matches!(
+            result,
+            Err(MsgHandlerError::FdOps(FdOpsError::DeviceIdentifiersError))
+        ));
+    }
+
+    #[test]
+    fn test_fd_progress_t1_timeout_fires_while_t2_retry_pending() {
+        let mut fd_ctx = new_test_fd_ctx();
+        let mut buffer = [0u8; 256];
+
+        // TransferComplete was sent at the current time, so T2 has not
+        // elapsed and fd_progress_download would return early, while the last
+        // UA activity is older than T1.
+        fd_ctx.internal.set_fd_state(FirmwareDeviceState::Download);
+        fd_ctx.internal.set_fd_req(
+            FdReqState::Sent,
+            true,
+            Some(TransferResult::TransferSuccess as u8),
+            Some(0),
+            Some(FwUpdateCmd::TransferComplete as u8),
+            Some(crate::config::DEFAULT_FD_T1_TIMEOUT + 1),
+        );
+        fd_ctx.internal.set_fd_t1_update_ts(0);
+
+        let result = fd_ctx.fd_progress(&mut buffer);
+
+        assert!(matches!(result, Err(MsgHandlerError::T1Timeout)));
+        assert_eq!(fd_ctx.internal.get_fd_state(), FirmwareDeviceState::Idle);
+        assert_eq!(
+            fd_ctx.internal.get_fd_reason(),
+            Some(GetStatusReasonCode::DownloadTimeout)
+        );
+        assert_eq!(fd_ctx.internal.get_fd_req().state, FdReqState::Unused);
+    }
+
+    #[test]
+    fn test_get_status_drops_progress_when_callback_fails() {
+        let mut fd_ctx = fd_ctx_with(&TEST_FD_OPS_PROGRESS_FAILS);
+        let mut buffer = [0u8; 256];
+
+        fd_ctx.internal.set_fd_state(FirmwareDeviceState::Download);
+
+        let req = GetStatusRequest::new(0x0A, PldmMsgType::Request);
+        req.encode(&mut buffer).unwrap();
+        assert!(fd_ctx.get_status_rsp(&mut buffer).is_ok());
+
+        // The callback wrote 100 and then failed, so the response must report
+        // that progress is not supported rather than a complete download.
+        let resp = GetStatusResponse::decode(&buffer).unwrap();
+        assert_eq!(resp.progress_percent, PROGRESS_PERCENT_NOT_SUPPORTED);
     }
 
     #[test]
