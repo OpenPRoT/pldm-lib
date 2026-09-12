@@ -623,6 +623,9 @@ impl PldmCodec for PldmFirmwareString {
         .unwrap();
         offset += core::mem::size_of::<u8>();
 
+        if str_len as usize > PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN {
+            return Err(PldmCodecError::InvalidData);
+        }
         let mut str_data = [0u8; PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN];
         str_data[..str_len as usize].copy_from_slice(
             buffer
