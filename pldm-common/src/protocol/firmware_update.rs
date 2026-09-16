@@ -51,6 +51,7 @@ pub enum FwUpdateCmd {
     GetPackageData = 0x11,
     GetDeviceMetaData = 0x12,
     GetMetaData = 0x19,
+    UpdateSecurityRevision = 0x22,
 }
 
 impl TryFrom<u8> for FwUpdateCmd {
@@ -78,6 +79,7 @@ impl TryFrom<u8> for FwUpdateCmd {
             0x11 => Ok(FwUpdateCmd::GetPackageData),
             0x12 => Ok(FwUpdateCmd::GetDeviceMetaData),
             0x19 => Ok(FwUpdateCmd::GetMetaData),
+            0x22 => Ok(FwUpdateCmd::UpdateSecurityRevision),
             _ => Err(PldmError::UnsupportedCmd),
         }
     }
