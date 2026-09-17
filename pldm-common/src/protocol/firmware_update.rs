@@ -52,6 +52,7 @@ pub enum FwUpdateCmd {
     ActivatePendingComponentImage = 0x1F,
     GetMetaData = 0x19,
     RequestDownstreamDeviceUpdate = 0x20,
+    UpdateSecurityRevision = 0x22,
 }
 
 impl TryFrom<u8> for FwUpdateCmd {
@@ -81,6 +82,7 @@ impl TryFrom<u8> for FwUpdateCmd {
             0x1E => Ok(FwUpdateCmd::ActivatePendingComponentImageSet),
             0x1F => Ok(FwUpdateCmd::ActivatePendingComponentImage),
             0x20 => Ok(FwUpdateCmd::RequestDownstreamDeviceUpdate),
+            0x22 => Ok(FwUpdateCmd::UpdateSecurityRevision),
             _ => Err(PldmError::UnsupportedCmd),
         }
     }

@@ -26,4 +26,5 @@ pub mod request_fw_data;
 pub mod request_update;
 pub mod transfer_complete;
 pub mod update_component;
+pub mod update_security_revision;
 pub mod verify_complete;
