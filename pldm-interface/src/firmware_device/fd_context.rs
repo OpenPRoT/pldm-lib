@@ -20,6 +20,9 @@ use pldm_common::codec::PldmCodec;
 use pldm_common::message::firmware_update::activate_fw::{
     ActivateFirmwareRequest, ActivateFirmwareResponse,
 };
+use pldm_common::message::firmware_update::activate_pending_component::{
+    ActivatePendingComponentRequest, ActivatePendingComponentResponse,
+};
 use pldm_common::message::firmware_update::get_fw_params::{
     FirmwareParameters, GetFirmwareParametersRequest, GetFirmwareParametersResponse,
 };
@@ -414,6 +417,59 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
                 }
                 Ok(bytes)
             }
+            Err(_) => {
+                generate_failure_response(payload, PldmBaseCompletionCode::InvalidLength as u8)
+            }
+        }
+    }
+
+    pub fn activate_pending_component_rsp(
+        &mut self,
+        payload: &mut [u8],
+    ) -> Result<usize, MsgHandlerError> {
+        // Check if FD is in 'Idle' state. Otherwise returns 'INVALID_STATE' completion code
+        if self.internal.get_fd_state() != FirmwareDeviceState::Idle {
+            return generate_failure_response(
+                payload,
+                FwUpdateCompletionCode::InvalidStateForCommand as u8,
+            );
+        }
+
+        // Decode the request message
+        let req =
+            ActivatePendingComponentRequest::decode(payload).map_err(MsgHandlerError::Codec)?;
+
+        // Construct temporary storage for the component
+        let pass_comp = FirmwareComponent::new(
+            req.comp_classification,
+            req.comp_identifier,
+            req.comp_classification_index,
+            0,
+            PldmFirmwareString::default(),
+            None,
+            None,
+        );
+
+        let mut firmware_params = FirmwareParameters::default();
+        self.ops
+            .get_firmware_parms(&mut firmware_params)
+            .map_err(MsgHandlerError::FdOps)?;
+
+        let mut estimated_time = 0u16;
+        let completion_code = self
+            .ops
+            .handle_pending_component(&pass_comp, &firmware_params, &mut estimated_time)
+            .map_err(MsgHandlerError::FdOps)?;
+
+        // Construct response
+        let resp = ActivatePendingComponentResponse::new(
+            req.hdr.instance_id(),
+            completion_code,
+            estimated_time,
+        );
+
+        match resp.encode(payload) {
+            Ok(bytes) => Ok(bytes),
             Err(_) => {
                 generate_failure_response(payload, PldmBaseCompletionCode::InvalidLength as u8)
             }
@@ -1103,26 +1159,38 @@ mod tests {
         devid_count: usize,
         // Make query_download_progress write a percentage and then fail.
         progress_fails: bool,
+        // Used to indicate whether an activate pending component request should be rejected.
+        reject_pending: bool,
     }
 
     static TEST_FD_OPS: TestFdOps = TestFdOps {
         devid_count: 1,
         progress_fails: false,
+        reject_pending: false,
     };
 
     static TEST_FD_OPS_NO_DEVID: TestFdOps = TestFdOps {
         devid_count: 0,
         progress_fails: false,
+        reject_pending: false,
     };
 
     static TEST_FD_OPS_EXTRA_DEVID: TestFdOps = TestFdOps {
         devid_count: MAX_DESCRIPTORS_COUNT + 1,
         progress_fails: false,
+        reject_pending: false,
     };
 
     static TEST_FD_OPS_PROGRESS_FAILS: TestFdOps = TestFdOps {
         devid_count: 1,
         progress_fails: true,
+        reject_pending: false,
+    };
+
+    static TEST_FD_OPS_REJECT_PENDING: TestFdOps = TestFdOps {
+        devid_count: 1,
+        progress_fails: false,
+        reject_pending: true,
     };
 
     impl FdOps for TestFdOps {
@@ -1222,6 +1290,19 @@ mod tests {
             _component: &FirmwareComponent,
         ) -> Result<(), crate::firmware_device::fd_ops::FdOpsError> {
             Ok(())
+        }
+
+        fn handle_pending_component(
+            &self,
+            _component: &FirmwareComponent,
+            _fw_params: &FirmwareParameters,
+            estimated_time: &mut u16,
+        ) -> Result<u8, crate::firmware_device::fd_ops::FdOpsError> {
+            if self.reject_pending {
+                return Ok(FwUpdateCompletionCode::ActivatePendingImageNotPermitted as u8);
+            }
+            *estimated_time = 100;
+            Ok(PldmBaseCompletionCode::Success as u8)
         }
 
         fn get_non_functional_component_info(
@@ -1455,6 +1536,30 @@ mod tests {
         assert_eq!(
             completion_code,
             FwUpdateCompletionCode::InvalidStateForCommand as u8
+        );
+    }
+
+    #[test]
+    fn test_activate_pending_component_invalid_state() {
+        let mut fd_ctx = new_test_fd_ctx();
+        let mut buffer = [0u8; 256];
+
+        fd_ctx.internal.set_fd_state(FirmwareDeviceState::Download);
+
+        let req = ActivatePendingComponentRequest::new(
+            1,
+            PldmMsgType::Request,
+            ComponentClassification::Firmware,
+            2,
+            3,
+        );
+        req.encode(&mut buffer).unwrap();
+
+        let result = fd_ctx.activate_pending_component_rsp(&mut buffer);
+        assert!(result.is_ok());
+        assert_eq!(
+            buffer[3],
+            FwUpdateCompletionCode::InvalidStateForCommand as u8,
         );
     }
 
@@ -1743,5 +1848,46 @@ mod tests {
         // The cancelled request is gone: a late UA response to it must be
         // rejected by handle_response's Sent + instance-id guard.
         assert_eq!(fd_ctx.internal.get_fd_req().state, FdReqState::Unused);
+    }
+
+    #[test]
+    fn test_activate_pending_component_success() {
+        let mut fd_ctx = new_test_fd_ctx();
+        let mut buffer = [0u8; 256];
+
+        let req = ActivatePendingComponentRequest::new(
+            1,
+            PldmMsgType::Request,
+            ComponentClassification::Firmware,
+            2,
+            3,
+        );
+        req.encode(&mut buffer).unwrap();
+
+        let result = fd_ctx.activate_pending_component_rsp(&mut buffer);
+        assert!(result.is_ok());
+        assert_eq!(buffer[3], PldmBaseCompletionCode::Success as u8);
+    }
+
+    #[test]
+    fn test_activate_pending_component_rejected() {
+        let mut fd_ctx = fd_ctx_with(&TEST_FD_OPS_REJECT_PENDING);
+        let mut buffer = [0u8; 256];
+
+        let req = ActivatePendingComponentRequest::new(
+            1,
+            PldmMsgType::Request,
+            ComponentClassification::Firmware,
+            2,
+            3,
+        );
+        req.encode(&mut buffer).unwrap();
+
+        let result = fd_ctx.activate_pending_component_rsp(&mut buffer);
+        assert!(result.is_ok());
+        assert_eq!(
+            buffer[3],
+            FwUpdateCompletionCode::ActivatePendingImageNotPermitted as u8,
+        );
     }
 }

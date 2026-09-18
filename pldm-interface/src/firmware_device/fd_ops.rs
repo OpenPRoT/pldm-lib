@@ -238,6 +238,23 @@ pub trait FdOps {
     /// * `Result<(), FdOpsError>` - On success, returns `Ok(())`. On failure, returns an `FdOpsError`.
     fn cancel_update_component(&self, component: &FirmwareComponent) -> Result<(), FdOpsError>;
 
+    /// Handles Activate Pending Component for out-of-transport FW updates.
+    ///
+    /// # Arguments
+    ///
+    /// * `component` - A reference to the `FirmwareComponent` for which the pending activation is being handled.
+    /// * `fw_params` - A reference to the `FirmwareParameters` associated with the operation.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<(u16), FdOpsError>` - On success, returns `Ok(u16)` containing the estimated time. On failure, returns an `FdOpsError`.
+    fn handle_pending_component(
+        &self,
+        component: &FirmwareComponent,
+        fw_params: &FirmwareParameters,
+        estimated_time: &mut u16,
+    ) -> Result<u8, FdOpsError>;
+
     /// Indicates which components will be in a non-functioning state upon exiting update mode
     /// due to cancel update request from UA.
     ///
