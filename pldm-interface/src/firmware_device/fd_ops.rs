@@ -244,10 +244,11 @@ pub trait FdOps {
     ///
     /// * `component` - A reference to the `FirmwareComponent` for which the pending activation is being handled.
     /// * `fw_params` - A reference to the `FirmwareParameters` associated with the operation.
+    /// * `estimated_time` - Set to the estimated time (in seconds) needed to complete the activation.
     ///
     /// # Returns
     ///
-    /// * `Result<(u16), FdOpsError>` - On success, returns `Ok(u16)` containing the estimated time. On failure, returns an `FdOpsError`.
+    /// * `Result<u8, FdOpsError>` - On success, returns `Ok(u8)` containing the completion code. On failure, returns an `FdOpsError`.
     fn handle_pending_component(
         &self,
         component: &FirmwareComponent,
