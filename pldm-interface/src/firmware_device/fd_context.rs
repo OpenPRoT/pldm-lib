@@ -1154,6 +1154,9 @@ mod tests {
     };
     use pldm_common::util::fw_component::FirmwareComponent;
 
+    // Arbitrary value for testing pending activation time
+    const TEST_PENDING_ACTIVATION_SECS: u16 = 100;
+
     struct TestFdOps {
         // What get_device_identifiers claims to have written.
         devid_count: usize,
@@ -1301,7 +1304,7 @@ mod tests {
             if self.reject_pending {
                 return Ok(FwUpdateCompletionCode::ActivatePendingImageNotPermitted as u8);
             }
-            *estimated_time = 100;
+            *estimated_time = TEST_PENDING_ACTIVATION_SECS;
             Ok(PldmBaseCompletionCode::Success as u8)
         }
 
@@ -1864,9 +1867,14 @@ mod tests {
         );
         req.encode(&mut buffer).unwrap();
 
-        let result = fd_ctx.activate_pending_component_rsp(&mut buffer);
-        assert!(result.is_ok());
-        assert_eq!(buffer[3], PldmBaseCompletionCode::Success as u8);
+        let bytes = fd_ctx.activate_pending_component_rsp(&mut buffer).unwrap();
+        let resp = ActivatePendingComponentResponse::decode(&buffer[..bytes]).unwrap();
+        // The response is `#[repr(packed)]`, so the fields are copied out before
+        // `assert_eq!` can take a reference to them.
+        let completion_code = resp.completion_code;
+        let estimated_time_activation = resp.estimated_time_activation;
+        assert_eq!(completion_code, PldmBaseCompletionCode::Success as u8);
+        assert_eq!(estimated_time_activation, TEST_PENDING_ACTIVATION_SECS);
     }
 
     #[test]
