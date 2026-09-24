@@ -274,12 +274,7 @@ pub trait FdOps {
             NonFunctioningComponentBitmap,
         ),
         FdOpsError,
-    > {
-        Ok((
-            NonFunctioningComponentIndication::ComponentsFunctioning,
-            NonFunctioningComponentBitmap::new(0),
-        ))
-    }
+    >;
 
     /// Retrieves the current timestamp in milliseconds.
     ///

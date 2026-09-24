@@ -51,7 +51,7 @@ error and reports `ProgressPercent::default()`, which is 101
 ## `FdOps` callback map
 
 Every method below has to be implemented by the platform integrating this
-crate, except `get_non_functional_component_info`, which has a default.
+crate.
 
 ### `get_device_identifiers`
 
@@ -194,8 +194,7 @@ Called from three paths:
 ### `get_non_functional_component_info`
 
 Returns the indication and bitmap describing components that will not function
-after leaving update mode. The default implementation reports that all
-components are functioning with an empty bitmap.
+after leaving update mode.
 
 Called by `cancel_update_rsp` to populate every `CancelUpdate` response after
 the context has determined whether an active component operation should be
