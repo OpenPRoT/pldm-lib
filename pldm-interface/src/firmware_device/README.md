@@ -199,16 +199,18 @@ over PLDM. Called by `activate_pending_component_rsp` for
 state is answered with `InvalidStateForCommand` before the callback runs. The FD
 stays `Idle`, so this command leaves no trace in `GetStatus`.
 
-Returns `Success`, `ActivationNotRequired` if the component has no pending
-image, or `ActivatePendingImageNotPermitted` if the platform does not support
-activating pending images. `estimated_time` is in seconds and only means
-anything on `Success`.
+Returns a `PendingComponentResult`: `Activated(estimated_time)` with the time in
+seconds, `ActivationNotRequired` if the component has no pending image, or
+`NotPermitted` if the platform does not activate pending images. The handler
+turns that into the completion code and estimated time on the wire, so a time
+can only be sent alongside `Success`.
 
-A classification of `ComponentClassification::DownstreamDevice` (0xFFFF) changes
-the other two fields: the identifier is a downstream device index, and the
-classification index picks one device (0x00) or all with matching descriptors
-(0xFF). All three are passed through unchanged, so the platform checks for
-0xFFFF itself.
+The callback gets a `PendingComponent`, which holds the three request fields and
+nothing else. They are passed through unchanged. A classification of
+`ComponentClassification::DownstreamDevice` (0xFFFF) changes what the other two
+mean: `downstream_device_index()` then returns the identifier as a device index,
+and the classification index picks one device (0x00) or all with matching
+descriptors (0xFF).
 
 ### `get_non_functional_component_info`
 
