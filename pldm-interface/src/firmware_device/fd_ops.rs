@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use pldm_common::message::firmware_update::activate_pending_component::{
+    PendingComponent, PendingComponentResult,
+};
 use pldm_common::message::firmware_update::apply_complete::ApplyResult;
 use pldm_common::message::firmware_update::get_status::ProgressPercent;
 use pldm_common::message::firmware_update::request_cancel::{
@@ -238,22 +241,30 @@ pub trait FdOps {
     /// * `Result<(), FdOpsError>` - On success, returns `Ok(())`. On failure, returns an `FdOpsError`.
     fn cancel_update_component(&self, component: &FirmwareComponent) -> Result<(), FdOpsError>;
 
-    /// Handles Activate Pending Component for out-of-transport FW updates.
+    /// Activates a component image the platform already holds, one that did not
+    /// arrive over PLDM.
+    ///
+    /// Called in the `Idle` state only: any other state is answered with
+    /// `InvalidStateForCommand` before this runs, and the FD stays `Idle`
+    /// either way.
     ///
     /// # Arguments
     ///
-    /// * `component` - A reference to the `FirmwareComponent` for which the pending activation is being handled.
+    /// * `component` - The component named by the request. A classification of
+    ///   0xFFFF makes the identifier a downstream device index, see
+    ///   `PendingComponent::downstream_device_index`.
     /// * `fw_params` - A reference to the `FirmwareParameters` associated with the operation.
     ///
     /// # Returns
     ///
-    /// * `Result<(u16), FdOpsError>` - On success, returns `Ok(u16)` containing the estimated time. On failure, returns an `FdOpsError`.
+    /// * `Result<PendingComponentResult, FdOpsError>` - On success, whether
+    ///   activation started, was not required, or is not permitted. On failure,
+    ///   returns an `FdOpsError`.
     fn handle_pending_component(
         &self,
-        component: &FirmwareComponent,
+        component: &PendingComponent,
         fw_params: &FirmwareParameters,
-        estimated_time: &mut u16,
-    ) -> Result<u8, FdOpsError>;
+    ) -> Result<PendingComponentResult, FdOpsError>;
 
     /// Indicates which components will be in a non-functioning state upon exiting update mode
     /// due to cancel update request from UA.

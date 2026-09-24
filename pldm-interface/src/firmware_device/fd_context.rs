@@ -21,7 +21,7 @@ use pldm_common::message::firmware_update::activate_fw::{
     ActivateFirmwareRequest, ActivateFirmwareResponse,
 };
 use pldm_common::message::firmware_update::activate_pending_component::{
-    ActivatePendingComponentRequest, ActivatePendingComponentResponse,
+    ActivatePendingComponentRequest, ActivatePendingComponentResponse, PendingComponent,
 };
 use pldm_common::message::firmware_update::get_fw_params::{
     FirmwareParameters, GetFirmwareParametersRequest, GetFirmwareParametersResponse,
@@ -439,15 +439,10 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
         let req =
             ActivatePendingComponentRequest::decode(payload).map_err(MsgHandlerError::Codec)?;
 
-        // Construct temporary storage for the component
-        let pass_comp = FirmwareComponent::new(
+        let pending_comp = PendingComponent::new(
             req.comp_classification,
             req.comp_identifier,
             req.comp_classification_index,
-            0,
-            PldmFirmwareString::default(),
-            None,
-            None,
         );
 
         let mut firmware_params = FirmwareParameters::default();
@@ -455,11 +450,11 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
             .get_firmware_parms(&mut firmware_params)
             .map_err(MsgHandlerError::FdOps)?;
 
-        let mut estimated_time = 0u16;
-        let completion_code = self
+        let (completion_code, estimated_time) = self
             .ops
-            .handle_pending_component(&pass_comp, &firmware_params, &mut estimated_time)
-            .map_err(MsgHandlerError::FdOps)?;
+            .handle_pending_component(&pending_comp, &firmware_params)
+            .map_err(MsgHandlerError::FdOps)?
+            .to_response_fields();
 
         // Construct response
         let resp = ActivatePendingComponentResponse::new(
@@ -1138,6 +1133,7 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
 mod tests {
     use super::*;
     use pldm_common::message::firmware_update::activate_fw::SelfContainedActivationRequest;
+    use pldm_common::message::firmware_update::activate_pending_component::PendingComponentResult;
     use pldm_common::message::firmware_update::apply_complete::ApplyResult;
     use pldm_common::message::firmware_update::get_status::{
         ProgressPercent, PROGRESS_PERCENT_NOT_SUPPORTED,
@@ -1294,15 +1290,13 @@ mod tests {
 
         fn handle_pending_component(
             &self,
-            _component: &FirmwareComponent,
+            _component: &PendingComponent,
             _fw_params: &FirmwareParameters,
-            estimated_time: &mut u16,
-        ) -> Result<u8, crate::firmware_device::fd_ops::FdOpsError> {
+        ) -> Result<PendingComponentResult, crate::firmware_device::fd_ops::FdOpsError> {
             if self.reject_pending {
-                return Ok(FwUpdateCompletionCode::ActivatePendingImageNotPermitted as u8);
+                return Ok(PendingComponentResult::NotPermitted);
             }
-            *estimated_time = 100;
-            Ok(PldmBaseCompletionCode::Success as u8)
+            Ok(PendingComponentResult::Activated(100))
         }
 
         fn get_non_functional_component_info(
