@@ -191,6 +191,25 @@ Called from three paths:
   the T1 timeout; the context then transitions to `Idle` and rejects a late UA
   response.
 
+### `handle_pending_component`
+
+Activates a component image the platform already holds, one that did not arrive
+over PLDM. Called by `activate_pending_component_rsp` for
+`ActivatePendingComponentImage` (0x1F), in the `Idle` state only: any other
+state is answered with `InvalidStateForCommand` before the callback runs. The FD
+stays `Idle`, so this command leaves no trace in `GetStatus`.
+
+Returns `Success`, `ActivationNotRequired` if the component has no pending
+image, or `ActivatePendingImageNotPermitted` if the platform does not support
+activating pending images. `estimated_time` is in seconds and only means
+anything on `Success`.
+
+A classification of `ComponentClassification::DownstreamDevice` (0xFFFF) changes
+the other two fields: the identifier is a downstream device index, and the
+classification index picks one device (0x00) or all with matching descriptors
+(0xFF). All three are passed through unchanged, so the platform checks for
+0xFFFF itself.
+
 ### `get_non_functional_component_info`
 
 Returns the indication and bitmap describing components that will not function
