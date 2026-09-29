@@ -13,9 +13,12 @@
 // limitations under the License.
 
 use crate::protocol::base::{
-    InstanceId, PldmMsgHeader, PldmMsgType, PldmSupportedType, PLDM_MSG_HEADER_LEN,
+    InstanceId, PldmBaseCompletionCode, PldmMsgHeader, PldmMsgType, PldmSupportedType,
+    PLDM_MSG_HEADER_LEN,
 };
-use crate::protocol::firmware_update::{ComponentClassification, FwUpdateCmd};
+use crate::protocol::firmware_update::{
+    ComponentClassification, FwUpdateCmd, FwUpdateCompletionCode,
+};
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
 /// Value for `comp_classification_index` that targets one downstream device.
@@ -28,6 +31,48 @@ pub const UPDATE_SECURITY_REVISION_SINGLE_DEVICE: u8 = 0x00;
 /// meaningful when the classification is
 /// [`ComponentClassification::DownstreamDevice`].
 pub const UPDATE_SECURITY_REVISION_ALL_DEVICES: u8 = 0xFF;
+
+/// What an `UpdateSecurityRevision` request names, DSP0267 1.3.0 section 12.19.
+///
+/// A classification of 0xFFFF ([`ComponentClassification::DownstreamDevice`])
+/// changes what the other two fields mean, so the three request fields decode
+/// into one of three cases instead of being passed through raw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecurityRevisionTarget {
+    /// A component of this device. `classification` stays a raw `u16`: it is
+    /// passed through as received, and `ComponentClassification` does not name
+    /// every value that can arrive.
+    Component {
+        classification: u16,
+        identifier: u16,
+        classification_index: u8,
+    },
+    /// The one downstream device at `index`.
+    SingleDownstreamDevice { index: u16 },
+    /// Every downstream device sharing the descriptors of the one at `index`.
+    AllDownstreamDevices { index: u16 },
+}
+
+/// Outcome of an `UpdateSecurityRevision` request, DSP0267 1.3.0 section 12.19.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecurityRevisionResult {
+    /// The security revision of the active image was committed.
+    Updated,
+    /// The FD does not commit the security revision of that image.
+    NotPermitted,
+}
+
+impl SecurityRevisionResult {
+    /// Completion code for the response.
+    pub fn to_completion_code(self) -> u8 {
+        match self {
+            SecurityRevisionResult::Updated => PldmBaseCompletionCode::Success as u8,
+            SecurityRevisionResult::NotPermitted => {
+                FwUpdateCompletionCode::UpdateSecurityRevisionNotPermitted as u8
+            }
+        }
+    }
+}
 
 /// UpdateSecurityRevision request, DSP0267 1.3.0 section 12.19.
 ///
@@ -71,6 +116,36 @@ impl UpdateSecurityRevisionRequest {
             comp_classification: comp_classification as u16,
             comp_identifier,
             comp_classification_index,
+        }
+    }
+
+    /// The component or downstream devices this request names, or `None` when
+    /// the classification is 0xFFFF and the classification index is neither
+    /// [`UPDATE_SECURITY_REVISION_SINGLE_DEVICE`] nor
+    /// [`UPDATE_SECURITY_REVISION_ALL_DEVICES`].
+    pub fn target(&self) -> Option<SecurityRevisionTarget> {
+        // The request is `#[repr(packed)]`, so the fields are copied out before
+        // they are read.
+        let classification = self.comp_classification;
+        let identifier = self.comp_identifier;
+        let classification_index = self.comp_classification_index;
+
+        if classification != ComponentClassification::DownstreamDevice as u16 {
+            return Some(SecurityRevisionTarget::Component {
+                classification,
+                identifier,
+                classification_index,
+            });
+        }
+
+        match classification_index {
+            UPDATE_SECURITY_REVISION_SINGLE_DEVICE => {
+                Some(SecurityRevisionTarget::SingleDownstreamDevice { index: identifier })
+            }
+            UPDATE_SECURITY_REVISION_ALL_DEVICES => {
+                Some(SecurityRevisionTarget::AllDownstreamDevices { index: identifier })
+            }
+            _ => None,
         }
     }
 }
@@ -163,6 +238,78 @@ mod test {
         assert_eq!(
             UpdateSecurityRevisionRequest::decode(&buffer),
             Err(PldmCodecError::BufferTooShort)
+        );
+    }
+
+    #[test]
+    fn test_update_security_revision_target_component() {
+        let request = UpdateSecurityRevisionRequest::new(
+            1,
+            PldmMsgType::Request,
+            ComponentClassification::Firmware,
+            0x0002,
+            3,
+        );
+
+        assert_eq!(
+            request.target(),
+            Some(SecurityRevisionTarget::Component {
+                classification: ComponentClassification::Firmware as u16,
+                identifier: 0x0002,
+                classification_index: 3,
+            })
+        );
+    }
+
+    #[test]
+    fn test_update_security_revision_target_downstream_devices() {
+        let single = UpdateSecurityRevisionRequest::new(
+            1,
+            PldmMsgType::Request,
+            ComponentClassification::DownstreamDevice,
+            0x0003,
+            UPDATE_SECURITY_REVISION_SINGLE_DEVICE,
+        );
+        assert_eq!(
+            single.target(),
+            Some(SecurityRevisionTarget::SingleDownstreamDevice { index: 0x0003 })
+        );
+
+        let all = UpdateSecurityRevisionRequest::new(
+            1,
+            PldmMsgType::Request,
+            ComponentClassification::DownstreamDevice,
+            0x0003,
+            UPDATE_SECURITY_REVISION_ALL_DEVICES,
+        );
+        assert_eq!(
+            all.target(),
+            Some(SecurityRevisionTarget::AllDownstreamDevices { index: 0x0003 })
+        );
+    }
+
+    #[test]
+    fn test_update_security_revision_target_rejects_an_unknown_device_selector() {
+        let request = UpdateSecurityRevisionRequest::new(
+            1,
+            PldmMsgType::Request,
+            ComponentClassification::DownstreamDevice,
+            0x0003,
+            0x01,
+        );
+
+        assert_eq!(request.target(), None);
+    }
+
+    #[test]
+    fn test_update_security_revision_result_completion_codes() {
+        assert_eq!(
+            SecurityRevisionResult::Updated.to_completion_code(),
+            PldmBaseCompletionCode::Success as u8
+        );
+        assert_eq!(
+            SecurityRevisionResult::NotPermitted.to_completion_code(),
+            FwUpdateCompletionCode::UpdateSecurityRevisionNotPermitted as u8
         );
     }
 
