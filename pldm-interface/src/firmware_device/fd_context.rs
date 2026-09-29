@@ -46,6 +46,9 @@ use pldm_common::message::firmware_update::transfer_complete::{
 use pldm_common::message::firmware_update::update_component::{
     UpdateComponentRequest, UpdateComponentResponse,
 };
+use pldm_common::message::firmware_update::update_security_revision::{
+    UpdateSecurityRevisionRequest, UpdateSecurityRevisionResponse,
+};
 
 use pldm_common::codec::PldmCodecError;
 use pldm_common::message::firmware_update::apply_complete::{ApplyCompleteRequest, ApplyResult};
@@ -467,6 +470,48 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
             completion_code,
             estimated_time,
         );
+
+        match resp.encode(payload) {
+            Ok(bytes) => Ok(bytes),
+            Err(_) => {
+                generate_failure_response(payload, PldmBaseCompletionCode::InvalidLength as u8)
+            }
+        }
+    }
+
+    pub fn update_security_revision_rsp(
+        &mut self,
+        payload: &mut [u8],
+    ) -> Result<usize, MsgHandlerError> {
+        // The command is only accepted in 'Idle'. Any other state gets
+        // 'INVALID_STATE_FOR_COMMAND'.
+        if self.internal.get_fd_state() != FirmwareDeviceState::Idle {
+            return generate_failure_response(
+                payload,
+                FwUpdateCompletionCode::InvalidStateForCommand as u8,
+            );
+        }
+
+        let req = UpdateSecurityRevisionRequest::decode(payload).map_err(MsgHandlerError::Codec)?;
+
+        // A downstream device request has to select one device or all of them,
+        // nothing else names a target.
+        let Some(target) = req.target() else {
+            return generate_failure_response(payload, PldmBaseCompletionCode::InvalidData as u8);
+        };
+
+        let mut firmware_params = FirmwareParameters::default();
+        self.ops
+            .get_firmware_parms(&mut firmware_params)
+            .map_err(MsgHandlerError::FdOps)?;
+
+        let completion_code = self
+            .ops
+            .update_security_revision(target, &firmware_params)
+            .map_err(MsgHandlerError::FdOps)?
+            .to_completion_code();
+
+        let resp = UpdateSecurityRevisionResponse::new(req.hdr.instance_id(), completion_code);
 
         match resp.encode(payload) {
             Ok(bytes) => Ok(bytes),
@@ -1147,7 +1192,8 @@ mod tests {
     };
     use pldm_common::message::firmware_update::transfer_complete::TransferResult;
     use pldm_common::message::firmware_update::update_security_revision::{
-        SecurityRevisionResult, SecurityRevisionTarget,
+        SecurityRevisionResult, SecurityRevisionTarget, UPDATE_SECURITY_REVISION_ALL_DEVICES,
+        UPDATE_SECURITY_REVISION_SINGLE_DEVICE,
     };
     use pldm_common::message::firmware_update::verify_complete::VerifyResult;
     use pldm_common::protocol::base::{PldmMsgHeader, PldmMsgType};
@@ -1159,6 +1205,9 @@ mod tests {
 
     // Arbitrary value for testing pending activation time
     const TEST_PENDING_ACTIVATION_SECS: u16 = 100;
+
+    // Neither 0x00 nor 0xFF, so it selects no downstream device.
+    const TEST_UNKNOWN_DEVICE_SELECTOR: u8 = 0x01;
 
     struct TestFdOps {
         // What get_device_identifiers claims to have written.
@@ -1914,6 +1963,113 @@ mod tests {
         assert_eq!(
             buffer[3],
             FwUpdateCompletionCode::ActivatePendingImageNotPermitted as u8,
+        );
+    }
+
+    #[test]
+    fn test_update_security_revision_success() {
+        let mut fd_ctx = new_test_fd_ctx();
+        let mut buffer = [0u8; 256];
+
+        let req = UpdateSecurityRevisionRequest::new(
+            1,
+            PldmMsgType::Request,
+            ComponentClassification::Firmware,
+            2,
+            3,
+        );
+        req.encode(&mut buffer).unwrap();
+
+        let bytes = fd_ctx.update_security_revision_rsp(&mut buffer).unwrap();
+        let resp = UpdateSecurityRevisionResponse::decode(&buffer[..bytes]).unwrap();
+        // The response is `#[repr(packed)]`, so the field is copied out before
+        // `assert_eq!` can take a reference to it.
+        let completion_code = resp.completion_code;
+        assert_eq!(completion_code, PldmBaseCompletionCode::Success as u8);
+    }
+
+    #[test]
+    fn test_update_security_revision_all_downstream_devices() {
+        let mut fd_ctx = new_test_fd_ctx();
+        let mut buffer = [0u8; 256];
+
+        let req = UpdateSecurityRevisionRequest::new(
+            1,
+            PldmMsgType::Request,
+            ComponentClassification::DownstreamDevice,
+            2,
+            UPDATE_SECURITY_REVISION_ALL_DEVICES,
+        );
+        req.encode(&mut buffer).unwrap();
+
+        let result = fd_ctx.update_security_revision_rsp(&mut buffer);
+        assert!(result.is_ok());
+        assert_eq!(buffer[3], PldmBaseCompletionCode::Success as u8);
+    }
+
+    #[test]
+    fn test_update_security_revision_rejected() {
+        let mut fd_ctx = new_test_fd_ctx();
+        let mut buffer = [0u8; 256];
+
+        // The test ops permit every target but a single downstream device.
+        let req = UpdateSecurityRevisionRequest::new(
+            1,
+            PldmMsgType::Request,
+            ComponentClassification::DownstreamDevice,
+            2,
+            UPDATE_SECURITY_REVISION_SINGLE_DEVICE,
+        );
+        req.encode(&mut buffer).unwrap();
+
+        let result = fd_ctx.update_security_revision_rsp(&mut buffer);
+        assert!(result.is_ok());
+        assert_eq!(
+            buffer[3],
+            FwUpdateCompletionCode::UpdateSecurityRevisionNotPermitted as u8,
+        );
+    }
+
+    #[test]
+    fn test_update_security_revision_unknown_device_selector() {
+        let mut fd_ctx = new_test_fd_ctx();
+        let mut buffer = [0u8; 256];
+
+        let req = UpdateSecurityRevisionRequest::new(
+            1,
+            PldmMsgType::Request,
+            ComponentClassification::DownstreamDevice,
+            2,
+            TEST_UNKNOWN_DEVICE_SELECTOR,
+        );
+        req.encode(&mut buffer).unwrap();
+
+        let result = fd_ctx.update_security_revision_rsp(&mut buffer);
+        assert!(result.is_ok());
+        assert_eq!(buffer[3], PldmBaseCompletionCode::InvalidData as u8);
+    }
+
+    #[test]
+    fn test_update_security_revision_invalid_state() {
+        let mut fd_ctx = new_test_fd_ctx();
+        let mut buffer = [0u8; 256];
+
+        fd_ctx.internal.set_fd_state(FirmwareDeviceState::Download);
+
+        let req = UpdateSecurityRevisionRequest::new(
+            1,
+            PldmMsgType::Request,
+            ComponentClassification::Firmware,
+            2,
+            3,
+        );
+        req.encode(&mut buffer).unwrap();
+
+        let result = fd_ctx.update_security_revision_rsp(&mut buffer);
+        assert!(result.is_ok());
+        assert_eq!(
+            buffer[3],
+            FwUpdateCompletionCode::InvalidStateForCommand as u8,
         );
     }
 }
