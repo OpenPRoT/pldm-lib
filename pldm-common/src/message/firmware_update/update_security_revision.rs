@@ -13,9 +13,12 @@
 // limitations under the License.
 
 use crate::protocol::base::{
-    InstanceId, PldmMsgHeader, PldmMsgType, PldmSupportedType, PLDM_MSG_HEADER_LEN,
+    InstanceId, PldmBaseCompletionCode, PldmMsgHeader, PldmMsgType, PldmSupportedType,
+    PLDM_MSG_HEADER_LEN,
 };
-use crate::protocol::firmware_update::{ComponentClassification, FwUpdateCmd};
+use crate::protocol::firmware_update::{
+    ComponentClassification, FwUpdateCmd, FwUpdateCompletionCode,
+};
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
 /// Value for `comp_classification_index` that targets one downstream device.
@@ -28,6 +31,39 @@ pub const UPDATE_SECURITY_REVISION_SINGLE_DEVICE: u8 = 0x00;
 /// meaningful when the classification is
 /// [`ComponentClassification::DownstreamDevice`].
 pub const UPDATE_SECURITY_REVISION_ALL_DEVICES: u8 = 0xFF;
+
+/// Component named by an `UpdateSecurityRevision` request.
+///
+/// Carries only the three request fields. `classification` stays a raw `u16`:
+/// it is passed through as received, and `ComponentClassification` does not
+/// name every value that can arrive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SecurityRevisionComponent {
+    pub classification: u16,
+    pub identifier: u16,
+    pub classification_index: u8,
+}
+
+/// Outcome of an `UpdateSecurityRevision` request, DSP0267 1.3.0 section 12.19.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecurityRevisionResult {
+    /// The security revision of the active image was committed.
+    Updated,
+    /// The FD does not commit the security revision of that image.
+    NotPermitted,
+}
+
+impl SecurityRevisionResult {
+    /// Completion code for the response.
+    pub fn to_completion_code(self) -> u8 {
+        match self {
+            SecurityRevisionResult::Updated => PldmBaseCompletionCode::Success as u8,
+            SecurityRevisionResult::NotPermitted => {
+                FwUpdateCompletionCode::UpdateSecurityRevisionNotPermitted as u8
+            }
+        }
+    }
+}
 
 /// UpdateSecurityRevision request, DSP0267 1.3.0 section 12.19.
 ///
@@ -163,6 +199,18 @@ mod test {
         assert_eq!(
             UpdateSecurityRevisionRequest::decode(&buffer),
             Err(PldmCodecError::BufferTooShort)
+        );
+    }
+
+    #[test]
+    fn test_update_security_revision_result_completion_codes() {
+        assert_eq!(
+            SecurityRevisionResult::Updated.to_completion_code(),
+            PldmBaseCompletionCode::Success as u8
+        );
+        assert_eq!(
+            SecurityRevisionResult::NotPermitted.to_completion_code(),
+            FwUpdateCompletionCode::UpdateSecurityRevisionNotPermitted as u8
         );
     }
 
