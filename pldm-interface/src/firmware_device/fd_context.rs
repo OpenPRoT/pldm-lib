@@ -46,6 +46,9 @@ use pldm_common::message::firmware_update::transfer_complete::{
 use pldm_common::message::firmware_update::update_component::{
     UpdateComponentRequest, UpdateComponentResponse,
 };
+use pldm_common::message::firmware_update::update_security_revision::{
+    SecurityRevisionComponent, UpdateSecurityRevisionRequest, UpdateSecurityRevisionResponse,
+};
 
 use pldm_common::codec::PldmCodecError;
 use pldm_common::message::firmware_update::apply_complete::{ApplyCompleteRequest, ApplyResult};
@@ -461,6 +464,54 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
             .handle_pending_component(&pending_comp, &firmware_params)
             .map_err(MsgHandlerError::FdOps)?
             .into_response(req.hdr.instance_id());
+
+        match resp.encode(payload) {
+            Ok(bytes) => Ok(bytes),
+            Err(_) => {
+                generate_failure_response(payload, PldmBaseCompletionCode::InvalidLength as u8)
+            }
+        }
+    }
+
+    pub fn update_security_revision_rsp(
+        &mut self,
+        payload: &mut [u8],
+    ) -> Result<usize, MsgHandlerError> {
+        // The command is only accepted in 'Idle'. Any other state gets
+        // 'INVALID_STATE_FOR_COMMAND'.
+        if self.internal.get_fd_state() != FirmwareDeviceState::Idle {
+            return generate_failure_response(
+                payload,
+                FwUpdateCompletionCode::InvalidStateForCommand as u8,
+            );
+        }
+
+        let req = UpdateSecurityRevisionRequest::decode(payload).map_err(MsgHandlerError::Codec)?;
+
+        // Classification 0xFFFF names a device behind an FDP. This FD has no
+        // FDP command support, so the request is refused before the callback.
+        if req.comp_classification == ComponentClassification::DownstreamDevice as u16 {
+            return generate_failure_response(payload, PldmBaseCompletionCode::InvalidData as u8);
+        }
+
+        let component = SecurityRevisionComponent {
+            classification: req.comp_classification,
+            identifier: req.comp_identifier,
+            classification_index: req.comp_classification_index,
+        };
+
+        let mut firmware_params = FirmwareParameters::default();
+        self.ops
+            .get_firmware_parms(&mut firmware_params)
+            .map_err(MsgHandlerError::FdOps)?;
+
+        let completion_code = self
+            .ops
+            .update_security_revision(&component, &firmware_params)
+            .map_err(MsgHandlerError::FdOps)?
+            .to_completion_code();
+
+        let resp = UpdateSecurityRevisionResponse::new(req.hdr.instance_id(), completion_code);
 
         match resp.encode(payload) {
             Ok(bytes) => Ok(bytes),
@@ -1201,6 +1252,13 @@ mod tests {
         progress_fails: false,
         pending_result: PendingComponentResult::NotPermitted,
         security_revision_result: SecurityRevisionResult::Updated,
+    };
+
+    static TEST_FD_OPS_REJECT_SECURITY_REVISION: TestFdOps = TestFdOps {
+        devid_count: 1,
+        progress_fails: false,
+        pending_result: PendingComponentResult::Activated(TEST_PENDING_ACTIVATION_SECS),
+        security_revision_result: SecurityRevisionResult::NotPermitted,
     };
 
     static TEST_FD_OPS_NO_PENDING_IMAGE: TestFdOps = TestFdOps {
@@ -1953,5 +2011,81 @@ mod tests {
             FwUpdateCompletionCode::ActivatePendingImageNotPermitted as u8
         );
         assert_eq!(estimated_time, 0);
+    }
+
+    // Sends one UpdateSecurityRevision request and returns the completion code.
+    fn update_security_revision(
+        fd_ctx: &mut FirmwareDeviceContext<'static, TestFdOps>,
+        classification: ComponentClassification,
+    ) -> u8 {
+        let mut buffer = [0u8; 256];
+
+        let req = UpdateSecurityRevisionRequest::new(1, PldmMsgType::Request, classification, 2, 3);
+        req.encode(&mut buffer).unwrap();
+
+        fd_ctx.update_security_revision_rsp(&mut buffer).unwrap();
+        buffer[3]
+    }
+
+    #[test]
+    fn test_update_security_revision_success() {
+        let mut fd_ctx = new_test_fd_ctx();
+        let mut buffer = [0u8; 256];
+
+        let req = UpdateSecurityRevisionRequest::new(
+            1,
+            PldmMsgType::Request,
+            ComponentClassification::Firmware,
+            2,
+            3,
+        );
+        req.encode(&mut buffer).unwrap();
+
+        // The one test that decodes the response, so the response length stays
+        // covered.
+        let bytes = fd_ctx.update_security_revision_rsp(&mut buffer).unwrap();
+        let resp = UpdateSecurityRevisionResponse::decode(&buffer[..bytes]).unwrap();
+        assert_eq!(
+            bytes,
+            core::mem::size_of::<UpdateSecurityRevisionResponse>()
+        );
+        // The response is `#[repr(packed)]`, so the field is copied out before
+        // `assert_eq!` can take a reference to it.
+        let completion_code = resp.completion_code;
+        assert_eq!(completion_code, PldmBaseCompletionCode::Success as u8);
+    }
+
+    #[test]
+    fn test_update_security_revision_rejected() {
+        let mut fd_ctx = fd_ctx_with(&TEST_FD_OPS_REJECT_SECURITY_REVISION);
+
+        assert_eq!(
+            update_security_revision(&mut fd_ctx, ComponentClassification::Firmware),
+            FwUpdateCompletionCode::UpdateSecurityRevisionNotPermitted as u8,
+        );
+    }
+
+    // A downstream device classification is refused by the context. The ops
+    // used here answer `Updated`, so the completion code also shows the
+    // callback never ran.
+    #[test]
+    fn test_update_security_revision_downstream_device_refused() {
+        let mut fd_ctx = new_test_fd_ctx();
+
+        assert_eq!(
+            update_security_revision(&mut fd_ctx, ComponentClassification::DownstreamDevice),
+            PldmBaseCompletionCode::InvalidData as u8,
+        );
+    }
+
+    #[test]
+    fn test_update_security_revision_invalid_state() {
+        let mut fd_ctx = new_test_fd_ctx();
+        fd_ctx.internal.set_fd_state(FirmwareDeviceState::Download);
+
+        assert_eq!(
+            update_security_revision(&mut fd_ctx, ComponentClassification::Firmware),
+            FwUpdateCompletionCode::InvalidStateForCommand as u8,
+        );
     }
 }
