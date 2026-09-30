@@ -1146,6 +1146,9 @@ mod tests {
         NonFunctioningComponentBitmap, NonFunctioningComponentIndication,
     };
     use pldm_common::message::firmware_update::transfer_complete::TransferResult;
+    use pldm_common::message::firmware_update::update_security_revision::{
+        SecurityRevisionResult, SecurityRevisionTarget,
+    };
     use pldm_common::message::firmware_update::verify_complete::VerifyResult;
     use pldm_common::protocol::base::{PldmMsgHeader, PldmMsgType};
     use pldm_common::protocol::firmware_update::{
@@ -1306,6 +1309,21 @@ mod tests {
             }
             *estimated_time = TEST_PENDING_ACTIVATION_SECS;
             Ok(PldmBaseCompletionCode::Success as u8)
+        }
+
+        fn update_security_revision(
+            &self,
+            target: SecurityRevisionTarget,
+            _fw_params: &FirmwareParameters,
+        ) -> Result<SecurityRevisionResult, crate::firmware_device::fd_ops::FdOpsError> {
+            // Permits every target except one downstream device, so a test can
+            // tell the two 0xFFFF selectors apart by the completion code.
+            match target {
+                SecurityRevisionTarget::SingleDownstreamDevice { .. } => {
+                    Ok(SecurityRevisionResult::NotPermitted)
+                }
+                _ => Ok(SecurityRevisionResult::Updated),
+            }
         }
 
         fn get_non_functional_component_info(
