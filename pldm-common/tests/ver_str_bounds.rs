@@ -27,26 +27,36 @@ use pldm_common::message::firmware_update::pass_component::{
 use pldm_common::message::firmware_update::request_update::{
     RequestUpdateRequest, RequestUpdateRequestFixed,
 };
+use pldm_common::message::firmware_update::update_component::{
+    UpdateComponentRequest, UpdateComponentRequestFixed,
+};
 use pldm_common::protocol::base::PldmMsgType;
 use pldm_common::protocol::firmware_update::{
-    PldmFirmwareString, PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN,
+    ComponentParameterEntry, ComponentParameterEntryFixed, PldmFirmwareString, MAX_COMPONENT_COUNT,
+    PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN,
 };
+use zerocopy::{FromZeros, Immutable, IntoBytes};
 
 /// Longest string the 32-byte destination can hold; the boundary that must
 /// still decode successfully.
 const MAX_LEN: usize = PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN;
 
+/// Serializes `fixed` and pads it with `tail` zero bytes, so the payload is
+/// long enough that only the destination bound can reject a length.
+fn wire<T: IntoBytes + Immutable>(fixed: &T, tail: usize) -> Vec<u8> {
+    let mut buf = fixed.as_bytes().to_vec();
+    buf.resize(buf.len() + tail, 0);
+    buf
+}
+
 /// Site 1: `RequestUpdateRequest::decode` reads `comp_image_set_ver_str_len`
 /// off the wire and copies that many bytes into a 32-byte array.
 #[test]
 fn request_update_rejects_over_long_ver_str() {
-    let fixed_sz = core::mem::size_of::<RequestUpdateRequestFixed>();
-
     for len in [MAX_LEN + 1, 64, 255] {
-        // Payload is long enough that the *source* check passes; only the
-        // destination bound can reject this.
-        let mut buf = vec![0u8; fixed_sz + 256];
-        buf[fixed_sz - 1] = len as u8; // comp_image_set_ver_str_len
+        let mut fixed = RequestUpdateRequestFixed::new_zeroed();
+        fixed.comp_image_set_ver_str_len = len as u8;
+        let buf = wire(&fixed, 256);
 
         assert_eq!(
             RequestUpdateRequest::decode(&buf),
@@ -60,9 +70,9 @@ fn request_update_rejects_over_long_ver_str() {
 /// short-buffer error, not `InvalidData`.
 #[test]
 fn request_update_short_buffer_still_reports_buffer_too_short() {
-    let fixed_sz = core::mem::size_of::<RequestUpdateRequestFixed>();
-    let mut buf = vec![0u8; fixed_sz + 4];
-    buf[fixed_sz - 1] = MAX_LEN as u8;
+    let mut fixed = RequestUpdateRequestFixed::new_zeroed();
+    fixed.comp_image_set_ver_str_len = MAX_LEN as u8;
+    let buf = wire(&fixed, 4);
 
     assert_eq!(
         RequestUpdateRequest::decode(&buf),
@@ -94,17 +104,21 @@ fn request_update_getter_clamps_unvalidated_length() {
     req.fixed.comp_image_set_ver_str_len = 255;
 
     let got = req.get_comp_image_set_ver_str();
-    assert_eq!(got.str_data.len(), MAX_LEN);
+    assert_eq!(got.str_len as usize, MAX_LEN);
+    assert_eq!(&got.str_data[..9], b"mcu-1.0.0");
+
+    // The clamped string must also encode without panicking.
+    let mut buf = [0u8; 64];
+    assert!(got.encode(&mut buf).is_ok());
 }
 
 /// Site 6: `PassComponentTableRequest::decode`, same shape as site 1.
 #[test]
 fn pass_component_rejects_over_long_ver_str() {
-    let fixed_sz = core::mem::size_of::<PassComponentTableRequestFixed>();
-
     for len in [MAX_LEN + 1, 64, 255] {
-        let mut buf = vec![0u8; fixed_sz + 256];
-        buf[fixed_sz - 1] = len as u8; // comp_ver_str_len
+        let mut fixed = PassComponentTableRequestFixed::new_zeroed();
+        fixed.comp_ver_str_len = len as u8;
+        let buf = wire(&fixed, 256);
 
         assert_eq!(
             PassComponentTableRequest::decode(&buf),
@@ -151,12 +165,10 @@ fn firmware_string_round_trips_every_valid_length() {
 /// `active_comp_image_set_ver_str_len` bytes into a 32-byte array.
 #[test]
 fn fw_params_rejects_over_long_active_ver_str() {
-    let fixed_sz = core::mem::size_of::<FirmwareParamFixed>();
-
     for len in [MAX_LEN + 1, 64, 255] {
-        let mut buf = vec![0u8; fixed_sz + 512];
-        // active len is the 4th field; pending len is the last byte of the struct.
-        buf[fixed_sz - 3] = len as u8;
+        let mut fixed = FirmwareParamFixed::new_zeroed();
+        fixed.active_comp_image_set_ver_str_len = len as u8;
+        let buf = wire(&fixed, 512);
 
         assert_eq!(
             FirmwareParameters::decode(&buf),
@@ -169,12 +181,11 @@ fn fw_params_rejects_over_long_active_ver_str() {
 /// Site 4: the same field for the pending version string.
 #[test]
 fn fw_params_rejects_over_long_pending_ver_str() {
-    let fixed_sz = core::mem::size_of::<FirmwareParamFixed>();
-
     for len in [MAX_LEN + 1, 64, 255] {
-        let mut buf = vec![0u8; fixed_sz + 512];
-        buf[fixed_sz - 3] = 8; // a valid active length
-        buf[fixed_sz - 1] = len as u8; // pending len
+        let mut fixed = FirmwareParamFixed::new_zeroed();
+        fixed.active_comp_image_set_ver_str_len = 8;
+        fixed.pending_comp_image_set_ver_str_len = len as u8;
+        let buf = wire(&fixed, 512);
 
         assert_eq!(
             FirmwareParameters::decode(&buf),
@@ -200,4 +211,113 @@ fn request_update_round_trip_still_works() {
     let mut buffer = [0u8; 512];
     let n = request.encode(&mut buffer).unwrap();
     assert_eq!(RequestUpdateRequest::decode(&buffer[..n]).unwrap(), request);
+}
+
+/// Site 7: `UpdateComponentRequest::decode`, same shape as site 1. It also
+/// indexed the source without `.get()`, so a short payload panicked too.
+#[test]
+fn update_component_rejects_over_long_ver_str() {
+    for len in [MAX_LEN + 1, 64, 255] {
+        let mut fixed = UpdateComponentRequestFixed::new_zeroed();
+        fixed.comp_ver_str_len = len as u8;
+        let buf = wire(&fixed, 256);
+
+        assert_eq!(
+            UpdateComponentRequest::decode(&buf),
+            Err(PldmCodecError::InvalidData),
+            "wire length {len} must be rejected, not panic"
+        );
+    }
+}
+
+#[test]
+fn update_component_short_buffer_reports_buffer_too_short() {
+    let mut fixed = UpdateComponentRequestFixed::new_zeroed();
+    fixed.comp_ver_str_len = MAX_LEN as u8;
+    let buf = wire(&fixed, 4);
+
+    assert_eq!(
+        UpdateComponentRequest::decode(&buf),
+        Err(PldmCodecError::BufferTooShort)
+    );
+}
+
+/// Sites 8 and 9: `ComponentParameterEntry::decode`, active and pending
+/// component version strings.
+#[test]
+fn component_entry_rejects_over_long_active_ver_str() {
+    for len in [MAX_LEN + 1, 64, 255] {
+        let mut fixed = ComponentParameterEntryFixed::new_zeroed();
+        fixed.active_comp_ver_str_len = len as u8;
+        let buf = wire(&fixed, 512);
+
+        assert_eq!(
+            ComponentParameterEntry::decode(&buf),
+            Err(PldmCodecError::InvalidData),
+            "active wire length {len} must be rejected, not panic"
+        );
+    }
+}
+
+#[test]
+fn component_entry_rejects_over_long_pending_ver_str() {
+    for len in [MAX_LEN + 1, 64, 255] {
+        let mut fixed = ComponentParameterEntryFixed::new_zeroed();
+        fixed.active_comp_ver_str_len = 8;
+        fixed.pending_comp_ver_str_len = len as u8;
+        let buf = wire(&fixed, 512);
+
+        assert_eq!(
+            ComponentParameterEntry::decode(&buf),
+            Err(PldmCodecError::InvalidData),
+            "pending wire length {len} must be rejected, not panic"
+        );
+    }
+}
+
+/// Site 10: a response that claims a component and then stops short must be
+/// a short-buffer error, not a panic on `unwrap`.
+#[test]
+fn fw_params_truncated_component_reports_buffer_too_short() {
+    let mut fixed = FirmwareParamFixed::new_zeroed();
+    fixed.comp_count = 1;
+    let buf = wire(&fixed, 4);
+
+    assert_eq!(
+        FirmwareParameters::decode(&buf),
+        Err(PldmCodecError::BufferTooShort)
+    );
+}
+
+/// Site 11: `comp_count` is a `u16` off the wire, but the table holds
+/// `MAX_COMPONENT_COUNT` entries. Anything above that must be rejected, not
+/// silently truncated into a struct that panics when it is encoded again.
+#[test]
+fn fw_params_rejects_too_many_components() {
+    let entry_sz = core::mem::size_of::<ComponentParameterEntryFixed>();
+    for count in [MAX_COMPONENT_COUNT + 1, u16::MAX as usize] {
+        let mut fixed = FirmwareParamFixed::new_zeroed();
+        fixed.comp_count = count as u16;
+        let buf = wire(&fixed, entry_sz * (MAX_COMPONENT_COUNT + 1));
+
+        assert_eq!(
+            FirmwareParameters::decode(&buf),
+            Err(PldmCodecError::InvalidData),
+            "comp_count {count} must be rejected"
+        );
+    }
+}
+
+/// The full table must still decode and encode again unchanged.
+#[test]
+fn fw_params_max_components_round_trip() {
+    let entry_sz = core::mem::size_of::<ComponentParameterEntryFixed>();
+    let mut fixed = FirmwareParamFixed::new_zeroed();
+    fixed.comp_count = MAX_COMPONENT_COUNT as u16;
+    let buf = wire(&fixed, entry_sz * MAX_COMPONENT_COUNT);
+
+    let params = FirmwareParameters::decode(&buf).unwrap();
+    let mut out = vec![0u8; buf.len()];
+    let n = params.encode(&mut out).unwrap();
+    assert_eq!(&out[..n], &buf[..]);
 }

@@ -77,7 +77,10 @@ impl RequestUpdateRequest {
     pub fn get_comp_image_set_ver_str(&self) -> PldmFirmwareString {
         PldmFirmwareString {
             str_type: self.fixed.comp_image_set_ver_str_type,
-            str_len: self.fixed.comp_image_set_ver_str_len,
+            str_len: self
+                .fixed
+                .comp_image_set_ver_str_len
+                .min(PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN as u8),
             str_data: {
                 let mut arr = [0u8; PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN];
                 let len = (self.fixed.comp_image_set_ver_str_len as usize)
