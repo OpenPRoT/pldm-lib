@@ -13,10 +13,57 @@
 // limitations under the License.
 
 use crate::protocol::base::{
-    InstanceId, PldmMsgHeader, PldmMsgType, PldmSupportedType, PLDM_MSG_HEADER_LEN,
+    InstanceId, PldmBaseCompletionCode, PldmMsgHeader, PldmMsgType, PldmSupportedType,
+    PLDM_MSG_HEADER_LEN,
 };
-use crate::protocol::firmware_update::{ComponentClassification, FwUpdateCmd};
+use crate::protocol::firmware_update::{
+    ComponentClassification, FwUpdateCmd, FwUpdateCompletionCode,
+};
 use zerocopy::{FromBytes, Immutable, IntoBytes};
+
+/// Component named by an `ActivatePendingComponentImage` request.
+///
+/// Carries only the three request fields. `classification` stays a raw `u16`:
+/// it is passed through as received, and `ComponentClassification` does not
+/// name every value that can arrive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingComponent {
+    pub classification: u16,
+    pub identifier: u16,
+    pub classification_index: u8,
+}
+
+/// Outcome of activating a pending component image, DSP0267 Table 44.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingComponentResult {
+    /// Activation started. The value is the estimated time in seconds.
+    Activated(u16),
+    /// The component has no pending image.
+    ActivationNotRequired,
+    /// The FD does not activate pending images.
+    NotPermitted,
+}
+
+impl PendingComponentResult {
+    /// The response carrying this outcome. The estimated time is zero unless
+    /// activation started, so a time never reaches the wire next to an error
+    /// completion code.
+    pub fn into_response(self, instance_id: InstanceId) -> ActivatePendingComponentResponse {
+        let (completion_code, estimated_time) = match self {
+            PendingComponentResult::Activated(estimated_time) => {
+                (PldmBaseCompletionCode::Success as u8, estimated_time)
+            }
+            PendingComponentResult::ActivationNotRequired => {
+                (FwUpdateCompletionCode::ActivationNotRequired as u8, 0)
+            }
+            PendingComponentResult::NotPermitted => (
+                FwUpdateCompletionCode::ActivatePendingImageNotPermitted as u8,
+                0,
+            ),
+        };
+        ActivatePendingComponentResponse::new(instance_id, completion_code, estimated_time)
+    }
+}
 
 #[derive(Debug, Clone, FromBytes, IntoBytes, Immutable, PartialEq)]
 #[repr(C, packed)]
@@ -100,6 +147,38 @@ mod tests {
         let decoded_request =
             ActivatePendingComponentRequest::decode(&buffer[..bytes_written]).unwrap();
         assert_eq!(request, decoded_request);
+    }
+
+    // The response is `#[repr(packed)]`, so the fields are copied out before
+    // `assert_eq!` can take a reference to them.
+    fn response_fields(result: PendingComponentResult) -> (u8, u16) {
+        let resp = result.into_response(1);
+        (resp.completion_code, resp.estimated_time_activation)
+    }
+
+    #[test]
+    fn test_pending_component_result_into_response() {
+        assert_eq!(
+            response_fields(PendingComponentResult::Activated(42)),
+            (PldmBaseCompletionCode::Success as u8, 42)
+        );
+        assert_eq!(
+            response_fields(PendingComponentResult::ActivationNotRequired),
+            (FwUpdateCompletionCode::ActivationNotRequired as u8, 0)
+        );
+        assert_eq!(
+            response_fields(PendingComponentResult::NotPermitted),
+            (
+                FwUpdateCompletionCode::ActivatePendingImageNotPermitted as u8,
+                0
+            )
+        );
+    }
+
+    #[test]
+    fn test_pending_component_result_response_header() {
+        let resp = PendingComponentResult::Activated(1).into_response(5);
+        assert_eq!(resp.hdr.instance_id(), 5);
     }
 
     #[test]
