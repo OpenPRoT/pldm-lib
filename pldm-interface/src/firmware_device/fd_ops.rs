@@ -21,6 +21,9 @@ use pldm_common::message::firmware_update::request_cancel::{
     NonFunctioningComponentBitmap, NonFunctioningComponentIndication,
 };
 use pldm_common::message::firmware_update::transfer_complete::TransferResult;
+use pldm_common::message::firmware_update::update_security_revision::{
+    SecurityRevisionComponent, SecurityRevisionResult,
+};
 use pldm_common::message::firmware_update::verify_complete::VerifyResult;
 use pldm_common::util::fw_component::FirmwareComponent;
 use pldm_common::{
@@ -39,6 +42,7 @@ pub enum FdOpsError {
     ApplyError,
     ActivateError,
     CancelUpdateError,
+    SecurityRevisionError,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -285,6 +289,36 @@ pub trait FdOps {
         ),
         FdOpsError,
     >;
+
+    /// Commits the security revision of the active running image, the image
+    /// named by an `UpdateSecurityRevision` request (0x22).
+    ///
+    /// The UA transferred that image with the Security Revision Number Delayed
+    /// Update option set, so it applied and activated without raising the
+    /// revision floor and a downgrade is still allowed. This call raises the
+    /// floor.
+    ///
+    /// Called in the `Idle` state only: any other state is answered with
+    /// `InvalidStateForCommand` before this runs, and the FD stays `Idle`
+    /// either way. A classification of 0xFFFF names a device behind a firmware
+    /// device proxy, which this FD is not, and is answered with `InvalidData`
+    /// before this runs.
+    ///
+    /// # Arguments
+    ///
+    /// * `component` - The component named by the request.
+    /// * `fw_params` - A reference to the `FirmwareParameters` associated with the operation.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<SecurityRevisionResult, FdOpsError>` - On success, whether the
+    ///   revision was committed or committing it is not permitted. On failure,
+    ///   returns an `FdOpsError`.
+    fn update_security_revision(
+        &self,
+        component: &SecurityRevisionComponent,
+        fw_params: &FirmwareParameters,
+    ) -> Result<SecurityRevisionResult, FdOpsError>;
 
     /// Retrieves the current timestamp in milliseconds.
     ///

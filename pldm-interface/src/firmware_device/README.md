@@ -220,6 +220,29 @@ Called by `cancel_update_rsp` to populate every `CancelUpdate` response after
 the context has determined whether an active component operation should be
 cancelled.
 
+### `update_security_revision`
+
+Commits the security revision of the active running image, raising the revision
+floor so the image it replaced can no longer be installed. The UA transferred
+that image with the Security Revision Number Delayed Update option set, which
+applies and activates it without raising the floor, so the UA can test it and
+still roll back.
+
+Called by `update_security_revision_rsp` for `UpdateSecurityRevision` (0x22), in
+the `Idle` state only: any other state is answered with `InvalidStateForCommand`
+before the callback runs. The FD stays `Idle`, so this command leaves no trace
+in `GetStatus`. It acts on the active image, never on a pending one.
+
+The callback gets a `SecurityRevisionComponent`, the three request fields and
+nothing else. A `ComponentClassification::DownstreamDevice` (0xFFFF)
+classification never reaches it: that value names a device behind a firmware
+device proxy, and this FD implements no FDP commands, so the context answers it
+with `InvalidData`.
+
+Returns a `SecurityRevisionResult`: `Updated` if the floor was raised, or
+`NotPermitted` if the FD does not commit the revision of that image. The handler
+turns that into the completion code on the wire.
+
 ### `now`
 
 Returns the current time in milliseconds as `PldmFdTime`. The clock has to be

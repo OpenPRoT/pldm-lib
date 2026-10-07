@@ -1143,6 +1143,9 @@ mod tests {
         NonFunctioningComponentBitmap, NonFunctioningComponentIndication,
     };
     use pldm_common::message::firmware_update::transfer_complete::TransferResult;
+    use pldm_common::message::firmware_update::update_security_revision::{
+        SecurityRevisionComponent, SecurityRevisionResult,
+    };
     use pldm_common::message::firmware_update::verify_complete::VerifyResult;
     use pldm_common::protocol::base::{PldmMsgHeader, PldmMsgType};
     use pldm_common::protocol::firmware_update::{
@@ -1162,42 +1165,49 @@ mod tests {
         // What handle_pending_component answers an activate pending component
         // request with.
         pending_result: PendingComponentResult,
+        security_revision_result: SecurityRevisionResult,
     }
 
     static TEST_FD_OPS: TestFdOps = TestFdOps {
         devid_count: 1,
         progress_fails: false,
         pending_result: PendingComponentResult::Activated(TEST_PENDING_ACTIVATION_SECS),
+        security_revision_result: SecurityRevisionResult::Updated,
     };
 
     static TEST_FD_OPS_NO_DEVID: TestFdOps = TestFdOps {
         devid_count: 0,
         progress_fails: false,
         pending_result: PendingComponentResult::Activated(TEST_PENDING_ACTIVATION_SECS),
+        security_revision_result: SecurityRevisionResult::Updated,
     };
 
     static TEST_FD_OPS_EXTRA_DEVID: TestFdOps = TestFdOps {
         devid_count: MAX_DESCRIPTORS_COUNT + 1,
         progress_fails: false,
         pending_result: PendingComponentResult::Activated(TEST_PENDING_ACTIVATION_SECS),
+        security_revision_result: SecurityRevisionResult::Updated,
     };
 
     static TEST_FD_OPS_PROGRESS_FAILS: TestFdOps = TestFdOps {
         devid_count: 1,
         progress_fails: true,
         pending_result: PendingComponentResult::Activated(TEST_PENDING_ACTIVATION_SECS),
+        security_revision_result: SecurityRevisionResult::Updated,
     };
 
     static TEST_FD_OPS_REJECT_PENDING: TestFdOps = TestFdOps {
         devid_count: 1,
         progress_fails: false,
         pending_result: PendingComponentResult::NotPermitted,
+        security_revision_result: SecurityRevisionResult::Updated,
     };
 
     static TEST_FD_OPS_NO_PENDING_IMAGE: TestFdOps = TestFdOps {
         devid_count: 1,
         progress_fails: false,
         pending_result: PendingComponentResult::ActivationNotRequired,
+        security_revision_result: SecurityRevisionResult::Updated,
     };
 
     impl FdOps for TestFdOps {
@@ -1305,6 +1315,14 @@ mod tests {
             _fw_params: &FirmwareParameters,
         ) -> Result<PendingComponentResult, crate::firmware_device::fd_ops::FdOpsError> {
             Ok(self.pending_result)
+        }
+
+        fn update_security_revision(
+            &self,
+            _component: &SecurityRevisionComponent,
+            _fw_params: &FirmwareParameters,
+        ) -> Result<SecurityRevisionResult, crate::firmware_device::fd_ops::FdOpsError> {
+            Ok(self.security_revision_result)
         }
 
         fn get_non_functional_component_info(
