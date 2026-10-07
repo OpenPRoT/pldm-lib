@@ -22,6 +22,8 @@ use zerocopy::{FromBytes, Immutable, IntoBytes};
 pub const PLDM_FWUP_COMPONENT_RELEASE_DATA_LEN: usize = 8;
 pub const PLDM_FWUP_BASELINE_TRANSFER_SIZE: usize = 32;
 pub const PLDM_FWUP_MAX_PADDING_SIZE: usize = PLDM_FWUP_BASELINE_TRANSFER_SIZE;
+/// Longest version string this crate can hold. DSP0267 allows up to 255 bytes;
+/// this is our limit, not the protocol's, and longer strings are rejected.
 pub const PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN: usize = 32;
 pub const DESCRIPTOR_DATA_MAX_LEN: usize = 64; // Arbitrary limit for static storage
 pub const MAX_COMPONENT_COUNT: usize = 8; // Arbitrary limit, change as needed
@@ -626,6 +628,9 @@ impl PldmCodec for PldmFirmwareString {
         .unwrap();
         offset += core::mem::size_of::<u8>();
 
+        if str_len as usize > PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN {
+            return Err(PldmCodecError::InvalidData);
+        }
         let mut str_data = [0u8; PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN];
         str_data[..str_len as usize].copy_from_slice(
             buffer
@@ -838,6 +843,9 @@ impl PldmCodec for ComponentParameterEntry {
         offset += core::mem::size_of::<ComponentParameterEntryFixed>();
 
         let active_comp_ver_str_len = comp_param_entry_fixed.active_comp_ver_str_len as usize;
+        if active_comp_ver_str_len > PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN {
+            return Err(PldmCodecError::InvalidData);
+        }
         let mut active_comp_ver_str = [0u8; PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN];
         active_comp_ver_str[..active_comp_ver_str_len].copy_from_slice(
             buffer
@@ -848,6 +856,9 @@ impl PldmCodec for ComponentParameterEntry {
 
         let pending_comp_ver_str = if comp_param_entry_fixed.pending_comp_ver_str_len > 0 {
             let len = comp_param_entry_fixed.pending_comp_ver_str_len as usize;
+            if len > PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN {
+                return Err(PldmCodecError::InvalidData);
+            }
             let mut arr = [0u8; PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN];
             arr[..len].copy_from_slice(
                 buffer
