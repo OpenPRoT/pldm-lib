@@ -17,7 +17,7 @@ use crate::error::MsgHandlerError;
 use crate::firmware_device::fd_context::FirmwareDeviceContext;
 use crate::firmware_device::fd_ops::FdOps;
 use core::sync::atomic::{AtomicBool, Ordering};
-use pldm_common::codec::PldmCodec;
+use pldm_common::codec::{PldmCodec, PldmCodecError};
 use pldm_common::protocol::base::{
     PldmBaseCompletionCode, PldmControlCmd, PldmFailureResponse, PldmMsgHeader, PldmSupportedType,
 };
@@ -39,6 +39,17 @@ pub(crate) fn generate_failure_response(
         completion_code,
     };
     resp.encode(payload).map_err(MsgHandlerError::Codec)
+}
+
+/// Completion code for a request that failed to decode. A message that is too
+/// short is INVALID_LENGTH; any other decode failure is INVALID_DATA.
+pub(crate) fn decode_failure_code(err: PldmCodecError) -> u8 {
+    match err {
+        PldmCodecError::BufferTooShort => PldmBaseCompletionCode::InvalidLength as u8,
+        PldmCodecError::InvalidData | PldmCodecError::Unsupported => {
+            PldmBaseCompletionCode::InvalidData as u8
+        }
+    }
 }
 
 pub struct CmdInterface<'a, O: FdOps> {
@@ -214,5 +225,26 @@ impl<'a, O: FdOps> CmdInterface<'a, O> {
         } else {
             Err(PldmBaseCompletionCode::UnsupportedPldmCmd as u8)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_decode_failure_code() {
+        assert_eq!(
+            decode_failure_code(PldmCodecError::BufferTooShort),
+            PldmBaseCompletionCode::InvalidLength as u8
+        );
+        assert_eq!(
+            decode_failure_code(PldmCodecError::InvalidData),
+            PldmBaseCompletionCode::InvalidData as u8
+        );
+        assert_eq!(
+            decode_failure_code(PldmCodecError::Unsupported),
+            PldmBaseCompletionCode::InvalidData as u8
+        );
     }
 }
