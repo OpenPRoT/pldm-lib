@@ -180,6 +180,9 @@ impl<'a, O: FdOps> CmdInterface<'a, O> {
                 FwUpdateCmd::ActivatePendingComponentImage => {
                     self.fd_ctx.activate_pending_component_rsp(payload)
                 }
+                FwUpdateCmd::UpdateSecurityRevision => {
+                    self.fd_ctx.update_security_revision_rsp(payload)
+                }
                 _ => generate_failure_response(
                     payload,
                     PldmBaseCompletionCode::UnsupportedPldmCmd as u8,
