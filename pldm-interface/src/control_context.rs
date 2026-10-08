@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::cmd_interface::generate_failure_response;
+use crate::cmd_interface::{decode_failure_code, generate_failure_response};
 use crate::error::MsgHandlerError;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use pldm_common::codec::PldmCodec;
@@ -179,7 +179,10 @@ pub trait CtrlCmdResponder {
 
 impl CtrlCmdResponder for ControlContext<'_> {
     fn get_tid_rsp(&self, payload: &mut [u8]) -> Result<usize, MsgHandlerError> {
-        let req = GetTidRequest::decode(payload).map_err(MsgHandlerError::Codec)?;
+        let req = match GetTidRequest::decode(payload) {
+            Ok(req) => req,
+            Err(e) => return generate_failure_response(payload, decode_failure_code(e)),
+        };
         let resp = GetTidResponse::new(
             req.hdr.instance_id(),
             self.get_tid(),
@@ -189,7 +192,10 @@ impl CtrlCmdResponder for ControlContext<'_> {
     }
 
     fn set_tid_rsp(&self, payload: &mut [u8]) -> Result<usize, MsgHandlerError> {
-        let req = SetTidRequest::decode(payload).map_err(MsgHandlerError::Codec)?;
+        let req = match SetTidRequest::decode(payload) {
+            Ok(req) => req,
+            Err(e) => return generate_failure_response(payload, decode_failure_code(e)),
+        };
         self.set_tid(req.tid);
         let resp =
             SetTidResponse::new(req.hdr.instance_id(), PldmBaseCompletionCode::Success as u8);
@@ -197,7 +203,10 @@ impl CtrlCmdResponder for ControlContext<'_> {
     }
 
     fn get_pldm_types_rsp(&self, payload: &mut [u8]) -> Result<usize, MsgHandlerError> {
-        let req = GetPldmTypeRequest::decode(payload).map_err(MsgHandlerError::Codec)?;
+        let req = match GetPldmTypeRequest::decode(payload) {
+            Ok(req) => req,
+            Err(e) => return generate_failure_response(payload, decode_failure_code(e)),
+        };
         let mut types = [0x0u8; 6];
         let num_types = self.get_supported_types(&mut types);
         let resp = GetPldmTypeResponse::new(
@@ -211,12 +220,7 @@ impl CtrlCmdResponder for ControlContext<'_> {
     fn get_pldm_commands_rsp(&self, payload: &mut [u8]) -> Result<usize, MsgHandlerError> {
         let req = match GetPldmCommandsRequest::decode(payload) {
             Ok(req) => req,
-            Err(_) => {
-                return generate_failure_response(
-                    payload,
-                    PldmBaseCompletionCode::InvalidLength as u8,
-                )
-            }
+            Err(e) => return generate_failure_response(payload, decode_failure_code(e)),
         };
 
         let pldm_type_in_req = match PldmSupportedType::try_from(req.pldm_type) {
@@ -265,12 +269,7 @@ impl CtrlCmdResponder for ControlContext<'_> {
     fn get_pldm_version_rsp(&self, payload: &mut [u8]) -> Result<usize, MsgHandlerError> {
         let req = match GetPldmVersionRequest::decode(payload) {
             Ok(req) => req,
-            Err(_) => {
-                return generate_failure_response(
-                    payload,
-                    PldmBaseCompletionCode::InvalidLength as u8,
-                )
-            }
+            Err(e) => return generate_failure_response(payload, decode_failure_code(e)),
         };
 
         let pldm_type_in_req = match PldmSupportedType::try_from(req.pldm_type) {
