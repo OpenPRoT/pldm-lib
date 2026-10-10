@@ -176,6 +176,9 @@ impl<'a, O: FdOps> CmdInterface<'a, O> {
                     self.fd_ctx.cancel_update_component_rsp(payload)
                 }
                 FwUpdateCmd::CancelUpdate => self.fd_ctx.cancel_update_rsp(payload),
+                FwUpdateCmd::UpdateSecurityRevision => {
+                    self.fd_ctx.update_security_revision_rsp(payload)
+                }
                 FwUpdateCmd::GetStatus => self.fd_ctx.get_status_rsp(payload),
                 FwUpdateCmd::ActivatePendingComponentImage => {
                     self.fd_ctx.activate_pending_component_rsp(payload)
