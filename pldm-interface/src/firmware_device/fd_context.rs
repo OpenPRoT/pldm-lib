@@ -1516,6 +1516,33 @@ mod tests {
     }
 
     #[test]
+    fn test_request_update_oversized_version_string_gets_invalid_data() {
+        use pldm_common::message::firmware_update::request_update::RequestUpdateRequestFixed;
+
+        let mut fd_ctx = new_test_fd_ctx();
+        let mut buffer = [0u8; 256];
+
+        let version_string = PldmFirmwareString::new("ASCII", "mcu-1.0.0").unwrap();
+        let req =
+            RequestUpdateRequest::new(0x03, PldmMsgType::Request, 256, 1, 5, 0, &version_string);
+        req.encode(&mut buffer).unwrap();
+
+        // Claim a 33-byte version string, one more than the FD can hold. The
+        // buffer is long enough, so this is bad data, not a short message.
+        let len_offset = core::mem::size_of::<RequestUpdateRequestFixed>() - 1;
+        buffer[len_offset] = (PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN + 1) as u8;
+
+        let len = fd_ctx.request_update_rsp(&mut buffer).unwrap();
+        assert_eq!(len, PLDM_FAILURE_RESP_LEN);
+
+        let resp_header = PldmMsgHeader::decode(&buffer).unwrap();
+        assert!(!resp_header.is_request());
+        assert_eq!(resp_header.instance_id(), 0x03);
+        assert_eq!(buffer[3], PldmBaseCompletionCode::InvalidData as u8);
+        assert_eq!(fd_ctx.internal.get_fd_state(), FirmwareDeviceState::Idle);
+    }
+
+    #[test]
     fn test_pass_component_invalid_state() {
         let mut fd_ctx = new_test_fd_ctx();
         let mut buffer = [0u8; 256];
