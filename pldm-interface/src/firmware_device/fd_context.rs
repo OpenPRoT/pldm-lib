@@ -46,6 +46,9 @@ use pldm_common::message::firmware_update::transfer_complete::{
 use pldm_common::message::firmware_update::update_component::{
     UpdateComponentRequest, UpdateComponentResponse,
 };
+use pldm_common::message::firmware_update::update_security_revision::{
+    SecurityRevisionComponent, UpdateSecurityRevisionRequest, UpdateSecurityRevisionResponse,
+};
 
 use pldm_common::codec::PldmCodecError;
 use pldm_common::message::firmware_update::apply_complete::{ApplyCompleteRequest, ApplyResult};
@@ -423,6 +426,32 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
         }
     }
 
+    /// Reads the firmware parameters that ActivatePendingComponentImage and
+    /// UpdateSecurityRevision both hand to their callback. If the request
+    /// has to be refused, writes the refusal into `payload` and returns how
+    /// many bytes it wrote.
+    ///
+    /// A classification of 0xFFFF means the component sits on a device
+    /// behind a proxy. This firmware device has no proxy commands, so it
+    /// refuses here. If it did not, the callback would act on the image in
+    /// front of it instead.
+    fn component_command_params(
+        &self,
+        payload: &mut [u8],
+        classification: u16,
+        firmware_params: &mut FirmwareParameters,
+    ) -> Result<Option<usize>, MsgHandlerError> {
+        if classification == ComponentClassification::DownstreamDevice as u16 {
+            return generate_failure_response(payload, PldmBaseCompletionCode::InvalidData as u8)
+                .map(Some);
+        }
+
+        self.ops
+            .get_firmware_parms(firmware_params)
+            .map_err(MsgHandlerError::FdOps)?;
+        Ok(None)
+    }
+
     pub fn activate_pending_component_rsp(
         &mut self,
         payload: &mut [u8],
@@ -439,10 +468,11 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
         let req =
             ActivatePendingComponentRequest::decode(payload).map_err(MsgHandlerError::Codec)?;
 
-        // Classification 0xFFFF names a device behind an FDP. This FD has no
-        // FDP command support, so the request is refused before the callback.
-        if req.comp_classification == ComponentClassification::DownstreamDevice as u16 {
-            return generate_failure_response(payload, PldmBaseCompletionCode::InvalidData as u8);
+        let mut firmware_params = FirmwareParameters::default();
+        if let Some(len) =
+            self.component_command_params(payload, req.comp_classification, &mut firmware_params)?
+        {
+            return Ok(len);
         }
 
         let pending_comp = PendingComponent {
@@ -451,16 +481,60 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
             classification_index: req.comp_classification_index,
         };
 
-        let mut firmware_params = FirmwareParameters::default();
-        self.ops
-            .get_firmware_parms(&mut firmware_params)
-            .map_err(MsgHandlerError::FdOps)?;
-
         let resp = self
             .ops
             .handle_pending_component(&pending_comp, &firmware_params)
             .map_err(MsgHandlerError::FdOps)?
             .into_response(req.hdr.instance_id());
+
+        match resp.encode(payload) {
+            Ok(bytes) => Ok(bytes),
+            Err(_) => {
+                generate_failure_response(payload, PldmBaseCompletionCode::InvalidLength as u8)
+            }
+        }
+    }
+
+    /// Answers `UpdateSecurityRevision` (0x22) by committing the security
+    /// revision of the active running image.
+    ///
+    /// Answered in `Idle` and nowhere else. The command acts on the image
+    /// the device is running, so in any other state the FD replies
+    /// `InvalidStateForCommand` and the callback never runs. Nothing here
+    /// changes the state, so `GetStatus` reads the same afterwards.
+    pub fn update_security_revision_rsp(
+        &mut self,
+        payload: &mut [u8],
+    ) -> Result<usize, MsgHandlerError> {
+        if self.internal.get_fd_state() != FirmwareDeviceState::Idle {
+            return generate_failure_response(
+                payload,
+                FwUpdateCompletionCode::InvalidStateForCommand as u8,
+            );
+        }
+
+        let req = UpdateSecurityRevisionRequest::decode(payload).map_err(MsgHandlerError::Codec)?;
+
+        let mut firmware_params = FirmwareParameters::default();
+        if let Some(len) =
+            self.component_command_params(payload, req.comp_classification, &mut firmware_params)?
+        {
+            return Ok(len);
+        }
+
+        let component = SecurityRevisionComponent {
+            classification: req.comp_classification,
+            identifier: req.comp_identifier,
+            classification_index: req.comp_classification_index,
+        };
+
+        let completion_code = self
+            .ops
+            .update_security_revision(&component, &firmware_params)
+            .map_err(MsgHandlerError::FdOps)?
+            .to_completion_code();
+
+        let resp = UpdateSecurityRevisionResponse::new(req.hdr.instance_id(), completion_code);
 
         match resp.encode(payload) {
             Ok(bytes) => Ok(bytes),
@@ -1175,6 +1249,13 @@ mod tests {
         security_revision_result: SecurityRevisionResult::Updated,
     };
 
+    static TEST_FD_OPS_NO_SECURITY_REVISION: TestFdOps = TestFdOps {
+        devid_count: 1,
+        progress_fails: false,
+        pending_result: PendingComponentResult::Activated(TEST_PENDING_ACTIVATION_SECS),
+        security_revision_result: SecurityRevisionResult::NotPermitted,
+    };
+
     static TEST_FD_OPS_NO_DEVID: TestFdOps = TestFdOps {
         devid_count: 0,
         progress_fails: false,
@@ -1581,6 +1662,66 @@ mod tests {
             buffer[3],
             FwUpdateCompletionCode::InvalidStateForCommand as u8,
         );
+    }
+
+    /// Asks the device to commit a security revision and gives back the
+    /// completion code it answered with.
+    fn update_security_revision_cc(
+        fd_ctx: &mut FirmwareDeviceContext<'_, TestFdOps>,
+        classification: ComponentClassification,
+    ) -> u8 {
+        let mut buffer = [0u8; 256];
+        UpdateSecurityRevisionRequest::new(1, PldmMsgType::Request, classification, 2, 3)
+            .encode(&mut buffer)
+            .unwrap();
+        assert!(fd_ctx.update_security_revision_rsp(&mut buffer).is_ok());
+        buffer[3]
+    }
+
+    #[test]
+    fn test_update_security_revision_committed() {
+        let mut fd_ctx = new_test_fd_ctx();
+
+        let cc = update_security_revision_cc(&mut fd_ctx, ComponentClassification::Firmware);
+
+        assert_eq!(cc, PldmBaseCompletionCode::Success as u8);
+        // Still Idle: this command does not move the device anywhere.
+        assert_eq!(fd_ctx.internal.get_fd_state(), FirmwareDeviceState::Idle);
+    }
+
+    #[test]
+    fn test_update_security_revision_not_permitted() {
+        let mut fd_ctx = fd_ctx_with(&TEST_FD_OPS_NO_SECURITY_REVISION);
+
+        let cc = update_security_revision_cc(&mut fd_ctx, ComponentClassification::Firmware);
+
+        assert_eq!(
+            cc,
+            FwUpdateCompletionCode::UpdateSecurityRevisionNotPermitted as u8
+        );
+    }
+
+    #[test]
+    fn test_update_security_revision_invalid_state() {
+        let mut fd_ctx = new_test_fd_ctx();
+        fd_ctx.internal.set_fd_state(FirmwareDeviceState::Download);
+
+        let cc = update_security_revision_cc(&mut fd_ctx, ComponentClassification::Firmware);
+
+        assert_eq!(cc, FwUpdateCompletionCode::InvalidStateForCommand as u8);
+    }
+
+    /// 0xFFFF means the component is on a device behind a proxy. This FD
+    /// has no proxy commands, so the request is refused and the callback
+    /// never runs.
+    #[test]
+    fn test_update_security_revision_downstream_device_refused() {
+        let mut fd_ctx = new_test_fd_ctx();
+
+        let cc =
+            update_security_revision_cc(&mut fd_ctx, ComponentClassification::DownstreamDevice);
+
+        assert_eq!(cc, PldmBaseCompletionCode::InvalidData as u8);
     }
 
     #[test]
