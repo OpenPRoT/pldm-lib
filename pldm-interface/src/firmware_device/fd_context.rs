@@ -1664,27 +1664,59 @@ mod tests {
         );
     }
 
+    /// Instance ID the requests below carry, so a test can check the
+    /// response comes back with the same one. Not 0 or 1: those are what a
+    /// zeroed field or a counter that starts at 1 produce, and the check
+    /// would pass on a response that never copied the request's ID.
+    const UPDATE_SECURITY_REVISION_INSTANCE_ID: u8 = 7;
+
+    /// Asks the device to commit a security revision and gives back what it
+    /// answered: the response length, the completion code and the instance
+    /// ID it echoed.
+    fn update_security_revision_response(
+        fd_ctx: &mut FirmwareDeviceContext<'_, TestFdOps>,
+        classification: ComponentClassification,
+    ) -> (usize, u8, u8) {
+        let mut buffer = [0u8; 256];
+        UpdateSecurityRevisionRequest::new(
+            UPDATE_SECURITY_REVISION_INSTANCE_ID,
+            PldmMsgType::Request,
+            classification,
+            2,
+            3,
+        )
+        .encode(&mut buffer)
+        .unwrap();
+
+        let bytes = fd_ctx.update_security_revision_rsp(&mut buffer).unwrap();
+        let resp = UpdateSecurityRevisionResponse::decode(&buffer[..bytes]).unwrap();
+        // The response is `#[repr(packed)]`, so the fields are copied out here:
+        // the callers cannot take a reference to them.
+        (bytes, resp.completion_code, resp.hdr.instance_id())
+    }
+
     /// Asks the device to commit a security revision and gives back the
     /// completion code it answered with.
     fn update_security_revision_cc(
         fd_ctx: &mut FirmwareDeviceContext<'_, TestFdOps>,
         classification: ComponentClassification,
     ) -> u8 {
-        let mut buffer = [0u8; 256];
-        UpdateSecurityRevisionRequest::new(1, PldmMsgType::Request, classification, 2, 3)
-            .encode(&mut buffer)
-            .unwrap();
-        assert!(fd_ctx.update_security_revision_rsp(&mut buffer).is_ok());
-        buffer[3]
+        update_security_revision_response(fd_ctx, classification).1
     }
 
     #[test]
     fn test_update_security_revision_committed() {
         let mut fd_ctx = new_test_fd_ctx();
 
-        let cc = update_security_revision_cc(&mut fd_ctx, ComponentClassification::Firmware);
+        let (bytes, cc, instance_id) =
+            update_security_revision_response(&mut fd_ctx, ComponentClassification::Firmware);
 
+        assert_eq!(
+            bytes,
+            core::mem::size_of::<UpdateSecurityRevisionResponse>()
+        );
         assert_eq!(cc, PldmBaseCompletionCode::Success as u8);
+        assert_eq!(instance_id, UPDATE_SECURITY_REVISION_INSTANCE_ID);
         // Still Idle: this command does not move the device anywhere.
         assert_eq!(fd_ctx.internal.get_fd_state(), FirmwareDeviceState::Idle);
     }
