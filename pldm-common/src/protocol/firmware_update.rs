@@ -441,6 +441,9 @@ impl PldmCodec for Descriptor {
         .unwrap();
         offset += core::mem::size_of::<u16>();
 
+        if descriptor_length as usize > DESCRIPTOR_DATA_MAX_LEN {
+            return Err(PldmCodecError::InvalidData);
+        }
         let mut descriptor_data = [0u8; DESCRIPTOR_DATA_MAX_LEN];
         descriptor_data[..descriptor_length as usize].copy_from_slice(
             buffer

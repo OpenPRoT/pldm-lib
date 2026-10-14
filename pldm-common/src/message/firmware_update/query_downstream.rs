@@ -23,7 +23,7 @@ use crate::pldm_completion_code;
 
 use crate::protocol::firmware_update::{
     ComponentActivationMethods, Descriptor, FirmwareDeviceCapability, FwUpdateCmd,
-    FwUpdateCompletionCode, PldmFirmwareString,
+    FwUpdateCompletionCode, PldmFirmwareString, PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN,
 };
 use bitfield::bitfield;
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, TryFromBytes};
@@ -945,27 +945,36 @@ impl PldmCodec for DownstreamDeviceParameterTable {
         let capabilities_during_update = CapabilitiesDuringUpdate::decode(&buffer[offset..])?;
         offset += size_of::<CapabilitiesDuringUpdate>();
 
+        let active_len = active_component_version_string_length as usize;
+        if active_len > PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN {
+            return Err(PldmCodecError::InvalidData);
+        }
         let mut active_component_version_string = PldmFirmwareString {
             str_type: active_component_version_string_type,
             str_len: active_component_version_string_length,
-            str_data: [0u8; 32],
+            str_data: [0u8; PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN],
         };
-        active_component_version_string.str_data[..active_component_version_string_length as usize]
-            .copy_from_slice(
-                &buffer[offset..offset + active_component_version_string_length as usize],
-            );
-        offset += active_component_version_string_length as usize;
+        active_component_version_string.str_data[..active_len].copy_from_slice(
+            buffer
+                .get(offset..offset + active_len)
+                .ok_or(PldmCodecError::BufferTooShort)?,
+        );
+        offset += active_len;
 
+        let pending_len = pending_component_version_string_length as usize;
+        if pending_len > PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN {
+            return Err(PldmCodecError::InvalidData);
+        }
         let mut pending_component_version_string = PldmFirmwareString {
             str_type: pending_component_version_string_type,
             str_len: pending_component_version_string_length,
-            str_data: [0u8; 32],
+            str_data: [0u8; PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN],
         };
-        pending_component_version_string.str_data
-            [..pending_component_version_string_length as usize]
-            .copy_from_slice(
-                &buffer[offset..offset + pending_component_version_string_length as usize],
-            );
+        pending_component_version_string.str_data[..pending_len].copy_from_slice(
+            buffer
+                .get(offset..offset + pending_len)
+                .ok_or(PldmCodecError::BufferTooShort)?,
+        );
 
         Ok(DownstreamDeviceParameterTable {
             downstream_device_index,
