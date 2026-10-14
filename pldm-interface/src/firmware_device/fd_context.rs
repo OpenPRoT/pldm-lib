@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::cmd_interface::generate_failure_response;
+use crate::cmd_interface::{decode_failure_code, generate_failure_response};
 use crate::error::MsgHandlerError;
 use crate::firmware_device::fd_internal::{FdInternal, FdReqState};
 use crate::firmware_device::fd_ops::{ComponentOperation, FdOps, FdOpsError};
@@ -95,7 +95,10 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
 
     pub fn query_devid_rsp(&self, payload: &mut [u8]) -> Result<usize, MsgHandlerError> {
         // Decode the request message
-        let req = QueryDeviceIdentifiersRequest::decode(payload).map_err(MsgHandlerError::Codec)?;
+        let req = match QueryDeviceIdentifiersRequest::decode(payload) {
+            Ok(req) => req,
+            Err(e) => return generate_failure_response(payload, decode_failure_code(e)),
+        };
 
         let mut device_identifiers: [Descriptor; MAX_DESCRIPTORS_COUNT] =
             [Descriptor::default(); MAX_DESCRIPTORS_COUNT];
@@ -134,7 +137,10 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
         payload: &mut [u8],
     ) -> Result<usize, MsgHandlerError> {
         // Decode the request message
-        let req = GetFirmwareParametersRequest::decode(payload).map_err(MsgHandlerError::Codec)?;
+        let req = match GetFirmwareParametersRequest::decode(payload) {
+            Ok(req) => req,
+            Err(e) => return generate_failure_response(payload, decode_failure_code(e)),
+        };
 
         let mut firmware_params = FirmwareParameters::default();
         self.ops
@@ -169,7 +175,10 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
         self.set_fd_t1_ts();
 
         // Decode the request message
-        let req = RequestUpdateRequest::decode(payload).map_err(MsgHandlerError::Codec)?;
+        let req = match RequestUpdateRequest::decode(payload) {
+            Ok(req) => req,
+            Err(e) => return generate_failure_response(payload, decode_failure_code(e)),
+        };
         let ua_transfer_size = req.fixed.max_transfer_size as usize;
         if ua_transfer_size < PLDM_FWUP_BASELINE_TRANSFER_SIZE {
             return generate_failure_response(
@@ -222,7 +231,10 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
         self.set_fd_t1_ts();
 
         // Decode the request message
-        let req = PassComponentTableRequest::decode(payload).map_err(MsgHandlerError::Codec)?;
+        let req = match PassComponentTableRequest::decode(payload) {
+            Ok(req) => req,
+            Err(e) => return generate_failure_response(payload, decode_failure_code(e)),
+        };
         let transfer_flag = match TransferRespFlag::try_from(req.fixed.transfer_flag) {
             Ok(flag) => flag,
             Err(_) => {
@@ -303,7 +315,10 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
         self.set_fd_t1_ts();
 
         // Decode the request message
-        let req = UpdateComponentRequest::decode(payload).map_err(MsgHandlerError::Codec)?;
+        let req = match UpdateComponentRequest::decode(payload) {
+            Ok(req) => req,
+            Err(e) => return generate_failure_response(payload, decode_failure_code(e)),
+        };
 
         // Construct temporary storage for the component
         let update_comp = FirmwareComponent::new(
@@ -386,7 +401,10 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
         }
 
         // Decode the request message
-        let req = ActivateFirmwareRequest::decode(payload).map_err(MsgHandlerError::Codec)?;
+        let req = match ActivateFirmwareRequest::decode(payload) {
+            Ok(req) => req,
+            Err(e) => return generate_failure_response(payload, decode_failure_code(e)),
+        };
         let self_contained = req.self_contained_activation_req;
 
         // Validate self_contained value
@@ -465,8 +483,10 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
         }
 
         // Decode the request message
-        let req =
-            ActivatePendingComponentRequest::decode(payload).map_err(MsgHandlerError::Codec)?;
+        let req = match ActivatePendingComponentRequest::decode(payload) {
+            Ok(req) => req,
+            Err(e) => return generate_failure_response(payload, decode_failure_code(e)),
+        };
 
         let mut firmware_params = FirmwareParameters::default();
         if let Some(len) =
@@ -579,7 +599,10 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
         }
 
         // Decode the request message
-        let req = CancelUpdateComponentRequest::decode(payload).map_err(MsgHandlerError::Codec)?;
+        let req = match CancelUpdateComponentRequest::decode(payload) {
+            Ok(req) => req,
+            Err(e) => return generate_failure_response(payload, decode_failure_code(e)),
+        };
         let completion_code = if should_cancel {
             PldmBaseCompletionCode::Success as u8
         } else {
@@ -631,7 +654,10 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
         }
 
         // Decode the request message
-        let req = CancelUpdateRequest::decode(payload).map_err(MsgHandlerError::Codec)?;
+        let req = match CancelUpdateRequest::decode(payload) {
+            Ok(req) => req,
+            Err(e) => return generate_failure_response(payload, decode_failure_code(e)),
+        };
         let completion_code = if should_cancel {
             PldmBaseCompletionCode::Success as u8
         } else {
@@ -665,7 +691,10 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
     }
 
     pub fn get_status_rsp(&mut self, payload: &mut [u8]) -> Result<usize, MsgHandlerError> {
-        let req = GetStatusRequest::decode(payload).map_err(MsgHandlerError::Codec)?;
+        let req = match GetStatusRequest::decode(payload) {
+            Ok(req) => req,
+            Err(e) => return generate_failure_response(payload, decode_failure_code(e)),
+        };
 
         let cur_state = self.internal.get_fd_state();
         let prev_state = self.internal.get_fd_prev_state();
@@ -1221,7 +1250,7 @@ mod tests {
         SecurityRevisionComponent, SecurityRevisionResult,
     };
     use pldm_common::message::firmware_update::verify_complete::VerifyResult;
-    use pldm_common::protocol::base::{PldmMsgHeader, PldmMsgType};
+    use pldm_common::protocol::base::{PldmMsgHeader, PldmMsgType, PLDM_FAILURE_RESP_LEN};
     use pldm_common::protocol::firmware_update::{
         ComponentClassification, ComponentResponseCode, Descriptor, PldmFirmwareString,
         UpdateOptionFlags, VersionStringType, PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN,
@@ -1542,6 +1571,56 @@ mod tests {
             completion_code,
             FwUpdateCompletionCode::InvalidTransferLength as u8
         );
+    }
+
+    #[test]
+    fn test_request_update_truncated_request_gets_invalid_length() {
+        let mut fd_ctx = new_test_fd_ctx();
+        let mut buffer = [0u8; 256];
+
+        let version_string = PldmFirmwareString::new("ASCII", "mcu-1.0.0").unwrap();
+        let req =
+            RequestUpdateRequest::new(0x03, PldmMsgType::Request, 256, 1, 5, 0, &version_string);
+        req.encode(&mut buffer).unwrap();
+
+        // Only the header and one byte of the body arrive. The UA must get a
+        // response, not silence until its timeout.
+        let truncated = &mut buffer[..PLDM_FAILURE_RESP_LEN];
+        let len = fd_ctx.request_update_rsp(truncated).unwrap();
+        assert_eq!(len, PLDM_FAILURE_RESP_LEN);
+
+        let resp_header = PldmMsgHeader::decode(&buffer).unwrap();
+        assert!(!resp_header.is_request());
+        assert_eq!(resp_header.instance_id(), 0x03);
+        assert_eq!(buffer[3], PldmBaseCompletionCode::InvalidLength as u8);
+        assert_eq!(fd_ctx.internal.get_fd_state(), FirmwareDeviceState::Idle);
+    }
+
+    #[test]
+    fn test_request_update_oversized_version_string_gets_invalid_data() {
+        use pldm_common::message::firmware_update::request_update::RequestUpdateRequestFixed;
+
+        let mut fd_ctx = new_test_fd_ctx();
+        let mut buffer = [0u8; 256];
+
+        let version_string = PldmFirmwareString::new("ASCII", "mcu-1.0.0").unwrap();
+        let req =
+            RequestUpdateRequest::new(0x03, PldmMsgType::Request, 256, 1, 5, 0, &version_string);
+        req.encode(&mut buffer).unwrap();
+
+        // Claim a 33-byte version string, one more than the FD can hold. The
+        // buffer is long enough, so this is bad data, not a short message.
+        let len_offset = core::mem::size_of::<RequestUpdateRequestFixed>() - 1;
+        buffer[len_offset] = (PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN + 1) as u8;
+
+        let len = fd_ctx.request_update_rsp(&mut buffer).unwrap();
+        assert_eq!(len, PLDM_FAILURE_RESP_LEN);
+
+        let resp_header = PldmMsgHeader::decode(&buffer).unwrap();
+        assert!(!resp_header.is_request());
+        assert_eq!(resp_header.instance_id(), 0x03);
+        assert_eq!(buffer[3], PldmBaseCompletionCode::InvalidData as u8);
+        assert_eq!(fd_ctx.internal.get_fd_state(), FirmwareDeviceState::Idle);
     }
 
     #[test]
