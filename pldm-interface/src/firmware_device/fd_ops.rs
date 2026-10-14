@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use pldm_common::message::firmware_update::activate_pending_component::{
+use pldm_common::message::firmware_update::activate_pending_component_image::{
     PendingComponent, PendingComponentResult,
 };
 use pldm_common::message::firmware_update::apply_complete::ApplyResult;
