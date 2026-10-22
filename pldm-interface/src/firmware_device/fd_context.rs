@@ -2045,7 +2045,7 @@ mod tests {
 
     // Sends one ActivatePendingComponentImage request and returns the response
     // length, completion code and estimated time.
-    fn activate_pending_component(ops: &'static TestFdOps) -> (usize, u8, u16) {
+    fn activate_pending_component_image(ops: &'static TestFdOps) -> (usize, u8, u16) {
         let mut fd_ctx = fd_ctx_with(ops);
         let mut buffer = [0u8; 256];
 
@@ -2069,7 +2069,8 @@ mod tests {
 
     #[test]
     fn test_activate_pending_component_image_success() {
-        let (bytes, completion_code, estimated_time) = activate_pending_component(&TEST_FD_OPS);
+        let (bytes, completion_code, estimated_time) =
+            activate_pending_component_image(&TEST_FD_OPS);
         assert_eq!(
             bytes,
             core::mem::size_of::<ActivatePendingComponentImageResponse>()
@@ -2081,7 +2082,7 @@ mod tests {
     #[test]
     fn test_activate_pending_component_image_not_required() {
         let (bytes, completion_code, estimated_time) =
-            activate_pending_component(&TEST_FD_OPS_NO_PENDING_IMAGE);
+            activate_pending_component_image(&TEST_FD_OPS_NO_PENDING_IMAGE);
         assert_eq!(
             bytes,
             core::mem::size_of::<ActivatePendingComponentImageResponse>()
@@ -2097,7 +2098,7 @@ mod tests {
     // used here would answer `ActivatePendingImageNotPermitted`, so the
     // completion code also shows the callback never ran.
     #[test]
-    fn test_activate_pending_component_downstream_device_refused() {
+    fn test_activate_pending_component_image_downstream_device_refused() {
         let mut fd_ctx = fd_ctx_with(&TEST_FD_OPS_REJECT_PENDING);
         let mut buffer = [0u8; 256];
 
@@ -2116,9 +2117,9 @@ mod tests {
     }
 
     #[test]
-    fn test_activate_pending_component_rejected() {
+    fn test_activate_pending_component_image_rejected() {
         let (bytes, completion_code, estimated_time) =
-            activate_pending_component(&TEST_FD_OPS_REJECT_PENDING);
+            activate_pending_component_image(&TEST_FD_OPS_REJECT_PENDING);
         assert_eq!(
             bytes,
             core::mem::size_of::<ActivatePendingComponentImageResponse>()
