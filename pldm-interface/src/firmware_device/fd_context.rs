@@ -20,8 +20,8 @@ use pldm_common::codec::PldmCodec;
 use pldm_common::message::firmware_update::activate_fw::{
     ActivateFirmwareRequest, ActivateFirmwareResponse,
 };
-use pldm_common::message::firmware_update::activate_pending_component::{
-    ActivatePendingComponentRequest, PendingComponent,
+use pldm_common::message::firmware_update::activate_pending_component_image::{
+    ActivatePendingComponentImageRequest, PendingComponent,
 };
 use pldm_common::message::firmware_update::get_fw_params::{
     FirmwareParameters, GetFirmwareParametersRequest, GetFirmwareParametersResponse,
@@ -452,7 +452,7 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
         Ok(None)
     }
 
-    pub fn activate_pending_component_rsp(
+    pub fn activate_pending_component_image_rsp(
         &mut self,
         payload: &mut [u8],
     ) -> Result<usize, MsgHandlerError> {
@@ -465,8 +465,8 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
         }
 
         // Decode the request message
-        let req =
-            ActivatePendingComponentRequest::decode(payload).map_err(MsgHandlerError::Codec)?;
+        let req = ActivatePendingComponentImageRequest::decode(payload)
+            .map_err(MsgHandlerError::Codec)?;
 
         let mut firmware_params = FirmwareParameters::default();
         if let Some(len) =
@@ -1206,8 +1206,8 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
 mod tests {
     use super::*;
     use pldm_common::message::firmware_update::activate_fw::SelfContainedActivationRequest;
-    use pldm_common::message::firmware_update::activate_pending_component::{
-        ActivatePendingComponentResponse, PendingComponentResult,
+    use pldm_common::message::firmware_update::activate_pending_component_image::{
+        ActivatePendingComponentImageResponse, PendingComponentResult,
     };
     use pldm_common::message::firmware_update::apply_complete::ApplyResult;
     use pldm_common::message::firmware_update::get_status::{
@@ -1641,13 +1641,13 @@ mod tests {
     }
 
     #[test]
-    fn test_activate_pending_component_invalid_state() {
+    fn test_activate_pending_component_image_invalid_state() {
         let mut fd_ctx = new_test_fd_ctx();
         let mut buffer = [0u8; 256];
 
         fd_ctx.internal.set_fd_state(FirmwareDeviceState::Download);
 
-        let req = ActivatePendingComponentRequest::new(
+        let req = ActivatePendingComponentImageRequest::new(
             1,
             PldmMsgType::Request,
             ComponentClassification::Firmware,
@@ -1656,7 +1656,7 @@ mod tests {
         );
         req.encode(&mut buffer).unwrap();
 
-        let result = fd_ctx.activate_pending_component_rsp(&mut buffer);
+        let result = fd_ctx.activate_pending_component_image_rsp(&mut buffer);
         assert!(result.is_ok());
         assert_eq!(
             buffer[3],
@@ -2045,11 +2045,11 @@ mod tests {
 
     // Sends one ActivatePendingComponentImage request and returns the response
     // length, completion code and estimated time.
-    fn activate_pending_component(ops: &'static TestFdOps) -> (usize, u8, u16) {
+    fn activate_pending_component_image(ops: &'static TestFdOps) -> (usize, u8, u16) {
         let mut fd_ctx = fd_ctx_with(ops);
         let mut buffer = [0u8; 256];
 
-        let req = ActivatePendingComponentRequest::new(
+        let req = ActivatePendingComponentImageRequest::new(
             1,
             PldmMsgType::Request,
             ComponentClassification::Firmware,
@@ -2058,31 +2058,34 @@ mod tests {
         );
         req.encode(&mut buffer).unwrap();
 
-        let bytes = fd_ctx.activate_pending_component_rsp(&mut buffer).unwrap();
-        let resp = ActivatePendingComponentResponse::decode(&buffer[..bytes]).unwrap();
+        let bytes = fd_ctx
+            .activate_pending_component_image_rsp(&mut buffer)
+            .unwrap();
+        let resp = ActivatePendingComponentImageResponse::decode(&buffer[..bytes]).unwrap();
         // The response is `#[repr(packed)]`, so the fields are copied out here:
         // the callers cannot take a reference to them.
         (bytes, resp.completion_code, resp.estimated_time_activation)
     }
 
     #[test]
-    fn test_activate_pending_component_success() {
-        let (bytes, completion_code, estimated_time) = activate_pending_component(&TEST_FD_OPS);
+    fn test_activate_pending_component_image_success() {
+        let (bytes, completion_code, estimated_time) =
+            activate_pending_component_image(&TEST_FD_OPS);
         assert_eq!(
             bytes,
-            core::mem::size_of::<ActivatePendingComponentResponse>()
+            core::mem::size_of::<ActivatePendingComponentImageResponse>()
         );
         assert_eq!(completion_code, PldmBaseCompletionCode::Success as u8);
         assert_eq!(estimated_time, TEST_PENDING_ACTIVATION_SECS);
     }
 
     #[test]
-    fn test_activate_pending_component_not_required() {
+    fn test_activate_pending_component_image_not_required() {
         let (bytes, completion_code, estimated_time) =
-            activate_pending_component(&TEST_FD_OPS_NO_PENDING_IMAGE);
+            activate_pending_component_image(&TEST_FD_OPS_NO_PENDING_IMAGE);
         assert_eq!(
             bytes,
-            core::mem::size_of::<ActivatePendingComponentResponse>()
+            core::mem::size_of::<ActivatePendingComponentImageResponse>()
         );
         assert_eq!(
             completion_code,
@@ -2095,11 +2098,11 @@ mod tests {
     // used here would answer `ActivatePendingImageNotPermitted`, so the
     // completion code also shows the callback never ran.
     #[test]
-    fn test_activate_pending_component_downstream_device_refused() {
+    fn test_activate_pending_component_image_downstream_device_refused() {
         let mut fd_ctx = fd_ctx_with(&TEST_FD_OPS_REJECT_PENDING);
         let mut buffer = [0u8; 256];
 
-        let req = ActivatePendingComponentRequest::new(
+        let req = ActivatePendingComponentImageRequest::new(
             1,
             PldmMsgType::Request,
             ComponentClassification::DownstreamDevice,
@@ -2108,18 +2111,18 @@ mod tests {
         );
         req.encode(&mut buffer).unwrap();
 
-        let result = fd_ctx.activate_pending_component_rsp(&mut buffer);
+        let result = fd_ctx.activate_pending_component_image_rsp(&mut buffer);
         assert!(result.is_ok());
         assert_eq!(buffer[3], PldmBaseCompletionCode::InvalidData as u8);
     }
 
     #[test]
-    fn test_activate_pending_component_rejected() {
+    fn test_activate_pending_component_image_rejected() {
         let (bytes, completion_code, estimated_time) =
-            activate_pending_component(&TEST_FD_OPS_REJECT_PENDING);
+            activate_pending_component_image(&TEST_FD_OPS_REJECT_PENDING);
         assert_eq!(
             bytes,
-            core::mem::size_of::<ActivatePendingComponentResponse>()
+            core::mem::size_of::<ActivatePendingComponentImageResponse>()
         );
         assert_eq!(
             completion_code,

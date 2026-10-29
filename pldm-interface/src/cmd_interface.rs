@@ -181,7 +181,7 @@ impl<'a, O: FdOps> CmdInterface<'a, O> {
                 }
                 FwUpdateCmd::GetStatus => self.fd_ctx.get_status_rsp(payload),
                 FwUpdateCmd::ActivatePendingComponentImage => {
-                    self.fd_ctx.activate_pending_component_rsp(payload)
+                    self.fd_ctx.activate_pending_component_image_rsp(payload)
                 }
                 _ => generate_failure_response(
                     payload,
