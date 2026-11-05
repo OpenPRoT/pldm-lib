@@ -48,7 +48,7 @@ impl PendingComponentResult {
     /// The response carrying this outcome. The estimated time is zero unless
     /// activation started, so a time never reaches the wire next to an error
     /// completion code.
-    pub fn into_response(self, instance_id: InstanceId) -> ActivatePendingComponentResponse {
+    pub fn into_response(self, instance_id: InstanceId) -> ActivatePendingComponentImageResponse {
         let (completion_code, estimated_time) = match self {
             PendingComponentResult::Activated(estimated_time) => {
                 (PldmBaseCompletionCode::Success as u8, estimated_time)
@@ -61,28 +61,28 @@ impl PendingComponentResult {
                 0,
             ),
         };
-        ActivatePendingComponentResponse::new(instance_id, completion_code, estimated_time)
+        ActivatePendingComponentImageResponse::new(instance_id, completion_code, estimated_time)
     }
 }
 
 #[derive(Debug, Clone, FromBytes, IntoBytes, Immutable, PartialEq)]
 #[repr(C, packed)]
-pub struct ActivatePendingComponentRequest {
+pub struct ActivatePendingComponentImageRequest {
     pub hdr: PldmMsgHeader<[u8; PLDM_MSG_HEADER_LEN]>,
     pub comp_classification: u16,
     pub comp_identifier: u16,
     pub comp_classification_index: u8,
 }
 
-impl ActivatePendingComponentRequest {
+impl ActivatePendingComponentImageRequest {
     pub fn new(
         instance_id: InstanceId,
         msg_type: PldmMsgType,
         comp_classification: ComponentClassification,
         comp_identifier: u16,
         comp_classification_index: u8,
-    ) -> ActivatePendingComponentRequest {
-        ActivatePendingComponentRequest {
+    ) -> ActivatePendingComponentImageRequest {
+        ActivatePendingComponentImageRequest {
             hdr: PldmMsgHeader::new(
                 instance_id,
                 msg_type,
@@ -98,19 +98,19 @@ impl ActivatePendingComponentRequest {
 
 #[derive(Debug, Clone, FromBytes, IntoBytes, Immutable, PartialEq)]
 #[repr(C, packed)]
-pub struct ActivatePendingComponentResponse {
+pub struct ActivatePendingComponentImageResponse {
     pub hdr: PldmMsgHeader<[u8; PLDM_MSG_HEADER_LEN]>,
     pub completion_code: u8,
     pub estimated_time_activation: u16,
 }
 
-impl ActivatePendingComponentResponse {
+impl ActivatePendingComponentImageResponse {
     pub fn new(
         instance_id: InstanceId,
         completion_code: u8,
         estimated_time_activation: u16,
-    ) -> ActivatePendingComponentResponse {
-        ActivatePendingComponentResponse {
+    ) -> ActivatePendingComponentImageResponse {
+        ActivatePendingComponentImageResponse {
             hdr: PldmMsgHeader::new(
                 instance_id,
                 PldmMsgType::Response,
@@ -129,8 +129,8 @@ mod tests {
     use crate::codec::PldmCodec;
 
     #[test]
-    fn test_activate_pending_component() {
-        let request = ActivatePendingComponentRequest::new(
+    fn test_activate_pending_component_image() {
+        let request = ActivatePendingComponentImageRequest::new(
             1,
             PldmMsgType::Request,
             ComponentClassification::Firmware,
@@ -142,10 +142,10 @@ mod tests {
         let bytes_written = request.encode(&mut buffer).unwrap();
         assert_eq!(
             bytes_written,
-            core::mem::size_of::<ActivatePendingComponentRequest>()
+            core::mem::size_of::<ActivatePendingComponentImageRequest>()
         );
         let decoded_request =
-            ActivatePendingComponentRequest::decode(&buffer[..bytes_written]).unwrap();
+            ActivatePendingComponentImageRequest::decode(&buffer[..bytes_written]).unwrap();
         assert_eq!(request, decoded_request);
     }
 
@@ -182,16 +182,16 @@ mod tests {
     }
 
     #[test]
-    fn test_activate_pending_component_response() {
-        let response = ActivatePendingComponentResponse::new(1, 0, 0);
+    fn test_activate_pending_component_image_response() {
+        let response = ActivatePendingComponentImageResponse::new(1, 0, 0);
         let mut buffer = [0u8; 64];
         let bytes_written = response.encode(&mut buffer).unwrap();
         assert_eq!(
             bytes_written,
-            core::mem::size_of::<ActivatePendingComponentResponse>()
+            core::mem::size_of::<ActivatePendingComponentImageResponse>()
         );
         let decoded_response =
-            ActivatePendingComponentResponse::decode(&buffer[..bytes_written]).unwrap();
+            ActivatePendingComponentImageResponse::decode(&buffer[..bytes_written]).unwrap();
         assert_eq!(response, decoded_response);
     }
 }

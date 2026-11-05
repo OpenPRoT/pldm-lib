@@ -20,8 +20,8 @@ use pldm_common::codec::PldmCodec;
 use pldm_common::message::firmware_update::activate_fw::{
     ActivateFirmwareRequest, ActivateFirmwareResponse,
 };
-use pldm_common::message::firmware_update::activate_pending_component::{
-    ActivatePendingComponentRequest, PendingComponent,
+use pldm_common::message::firmware_update::activate_pending_component_image::{
+    ActivatePendingComponentImageRequest, PendingComponent,
 };
 use pldm_common::message::firmware_update::get_fw_params::{
     FirmwareParameters, GetFirmwareParametersRequest, GetFirmwareParametersResponse,
@@ -45,6 +45,9 @@ use pldm_common::message::firmware_update::transfer_complete::{
 };
 use pldm_common::message::firmware_update::update_component::{
     UpdateComponentRequest, UpdateComponentResponse,
+};
+use pldm_common::message::firmware_update::update_security_revision::{
+    SecurityRevisionComponent, UpdateSecurityRevisionRequest, UpdateSecurityRevisionResponse,
 };
 
 use pldm_common::codec::PldmCodecError;
@@ -441,7 +444,33 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
         }
     }
 
-    pub fn activate_pending_component_rsp(
+    /// Reads the firmware parameters that ActivatePendingComponentImage and
+    /// UpdateSecurityRevision both hand to their callback. If the request
+    /// has to be refused, writes the refusal into `payload` and returns how
+    /// many bytes it wrote.
+    ///
+    /// A classification of 0xFFFF means the component sits on a device
+    /// behind a proxy. This firmware device has no proxy commands, so it
+    /// refuses here. If it did not, the callback would act on the image in
+    /// front of it instead.
+    fn component_command_params(
+        &self,
+        payload: &mut [u8],
+        classification: u16,
+        firmware_params: &mut FirmwareParameters,
+    ) -> Result<Option<usize>, MsgHandlerError> {
+        if classification == ComponentClassification::DownstreamDevice as u16 {
+            return generate_failure_response(payload, PldmBaseCompletionCode::InvalidData as u8)
+                .map(Some);
+        }
+
+        self.ops
+            .get_firmware_parms(firmware_params)
+            .map_err(MsgHandlerError::FdOps)?;
+        Ok(None)
+    }
+
+    pub fn activate_pending_component_image_rsp(
         &mut self,
         payload: &mut [u8],
     ) -> Result<usize, MsgHandlerError> {
@@ -459,10 +488,11 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
             Err(e) => return generate_failure_response(payload, decode_failure_code(e)),
         };
 
-        // Classification 0xFFFF names a device behind an FDP. This FD has no
-        // FDP command support, so the request is refused before the callback.
-        if req.comp_classification == ComponentClassification::DownstreamDevice as u16 {
-            return generate_failure_response(payload, PldmBaseCompletionCode::InvalidData as u8);
+        let mut firmware_params = FirmwareParameters::default();
+        if let Some(len) =
+            self.component_command_params(payload, req.comp_classification, &mut firmware_params)?
+        {
+            return Ok(len);
         }
 
         let pending_comp = PendingComponent {
@@ -471,16 +501,60 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
             classification_index: req.comp_classification_index,
         };
 
-        let mut firmware_params = FirmwareParameters::default();
-        self.ops
-            .get_firmware_parms(&mut firmware_params)
-            .map_err(MsgHandlerError::FdOps)?;
-
         let resp = self
             .ops
             .handle_pending_component(&pending_comp, &firmware_params)
             .map_err(MsgHandlerError::FdOps)?
             .into_response(req.hdr.instance_id());
+
+        match resp.encode(payload) {
+            Ok(bytes) => Ok(bytes),
+            Err(_) => {
+                generate_failure_response(payload, PldmBaseCompletionCode::InvalidLength as u8)
+            }
+        }
+    }
+
+    /// Answers `UpdateSecurityRevision` (0x22) by committing the security
+    /// revision of the active running image.
+    ///
+    /// Answered in `Idle` and nowhere else. The command acts on the image
+    /// the device is running, so in any other state the FD replies
+    /// `InvalidStateForCommand` and the callback never runs. Nothing here
+    /// changes the state, so `GetStatus` reads the same afterwards.
+    pub fn update_security_revision_rsp(
+        &mut self,
+        payload: &mut [u8],
+    ) -> Result<usize, MsgHandlerError> {
+        if self.internal.get_fd_state() != FirmwareDeviceState::Idle {
+            return generate_failure_response(
+                payload,
+                FwUpdateCompletionCode::InvalidStateForCommand as u8,
+            );
+        }
+
+        let req = UpdateSecurityRevisionRequest::decode(payload).map_err(MsgHandlerError::Codec)?;
+
+        let mut firmware_params = FirmwareParameters::default();
+        if let Some(len) =
+            self.component_command_params(payload, req.comp_classification, &mut firmware_params)?
+        {
+            return Ok(len);
+        }
+
+        let component = SecurityRevisionComponent {
+            classification: req.comp_classification,
+            identifier: req.comp_identifier,
+            classification_index: req.comp_classification_index,
+        };
+
+        let completion_code = self
+            .ops
+            .update_security_revision(&component, &firmware_params)
+            .map_err(MsgHandlerError::FdOps)?
+            .to_completion_code();
+
+        let resp = UpdateSecurityRevisionResponse::new(req.hdr.instance_id(), completion_code);
 
         match resp.encode(payload) {
             Ok(bytes) => Ok(bytes),
@@ -1161,8 +1235,8 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
 mod tests {
     use super::*;
     use pldm_common::message::firmware_update::activate_fw::SelfContainedActivationRequest;
-    use pldm_common::message::firmware_update::activate_pending_component::{
-        ActivatePendingComponentResponse, PendingComponentResult,
+    use pldm_common::message::firmware_update::activate_pending_component_image::{
+        ActivatePendingComponentImageResponse, PendingComponentResult,
     };
     use pldm_common::message::firmware_update::apply_complete::ApplyResult;
     use pldm_common::message::firmware_update::get_status::{
@@ -1202,6 +1276,13 @@ mod tests {
         progress_fails: false,
         pending_result: PendingComponentResult::Activated(TEST_PENDING_ACTIVATION_SECS),
         security_revision_result: SecurityRevisionResult::Updated,
+    };
+
+    static TEST_FD_OPS_NO_SECURITY_REVISION: TestFdOps = TestFdOps {
+        devid_count: 1,
+        progress_fails: false,
+        pending_result: PendingComponentResult::Activated(TEST_PENDING_ACTIVATION_SECS),
+        security_revision_result: SecurityRevisionResult::NotPermitted,
     };
 
     static TEST_FD_OPS_NO_DEVID: TestFdOps = TestFdOps {
@@ -1639,13 +1720,13 @@ mod tests {
     }
 
     #[test]
-    fn test_activate_pending_component_invalid_state() {
+    fn test_activate_pending_component_image_invalid_state() {
         let mut fd_ctx = new_test_fd_ctx();
         let mut buffer = [0u8; 256];
 
         fd_ctx.internal.set_fd_state(FirmwareDeviceState::Download);
 
-        let req = ActivatePendingComponentRequest::new(
+        let req = ActivatePendingComponentImageRequest::new(
             1,
             PldmMsgType::Request,
             ComponentClassification::Firmware,
@@ -1654,12 +1735,104 @@ mod tests {
         );
         req.encode(&mut buffer).unwrap();
 
-        let result = fd_ctx.activate_pending_component_rsp(&mut buffer);
+        let result = fd_ctx.activate_pending_component_image_rsp(&mut buffer);
         assert!(result.is_ok());
         assert_eq!(
             buffer[3],
             FwUpdateCompletionCode::InvalidStateForCommand as u8,
         );
+    }
+
+    /// Instance ID the requests below carry, so a test can check the
+    /// response comes back with the same one. Not 0 or 1: those are what a
+    /// zeroed field or a counter that starts at 1 produce, and the check
+    /// would pass on a response that never copied the request's ID.
+    const UPDATE_SECURITY_REVISION_INSTANCE_ID: u8 = 7;
+
+    /// Asks the device to commit a security revision and gives back what it
+    /// answered: the response length, the completion code and the instance
+    /// ID it echoed.
+    fn update_security_revision_response(
+        fd_ctx: &mut FirmwareDeviceContext<'_, TestFdOps>,
+        classification: ComponentClassification,
+    ) -> (usize, u8, u8) {
+        let mut buffer = [0u8; 256];
+        UpdateSecurityRevisionRequest::new(
+            UPDATE_SECURITY_REVISION_INSTANCE_ID,
+            PldmMsgType::Request,
+            classification,
+            2,
+            3,
+        )
+        .encode(&mut buffer)
+        .unwrap();
+
+        let bytes = fd_ctx.update_security_revision_rsp(&mut buffer).unwrap();
+        let resp = UpdateSecurityRevisionResponse::decode(&buffer[..bytes]).unwrap();
+        // The response is `#[repr(packed)]`, so the fields are copied out here:
+        // the callers cannot take a reference to them.
+        (bytes, resp.completion_code, resp.hdr.instance_id())
+    }
+
+    /// Asks the device to commit a security revision and gives back the
+    /// completion code it answered with.
+    fn update_security_revision_cc(
+        fd_ctx: &mut FirmwareDeviceContext<'_, TestFdOps>,
+        classification: ComponentClassification,
+    ) -> u8 {
+        update_security_revision_response(fd_ctx, classification).1
+    }
+
+    #[test]
+    fn test_update_security_revision_committed() {
+        let mut fd_ctx = new_test_fd_ctx();
+
+        let (bytes, cc, instance_id) =
+            update_security_revision_response(&mut fd_ctx, ComponentClassification::Firmware);
+
+        assert_eq!(
+            bytes,
+            core::mem::size_of::<UpdateSecurityRevisionResponse>()
+        );
+        assert_eq!(cc, PldmBaseCompletionCode::Success as u8);
+        assert_eq!(instance_id, UPDATE_SECURITY_REVISION_INSTANCE_ID);
+        // Still Idle: this command does not move the device anywhere.
+        assert_eq!(fd_ctx.internal.get_fd_state(), FirmwareDeviceState::Idle);
+    }
+
+    #[test]
+    fn test_update_security_revision_not_permitted() {
+        let mut fd_ctx = fd_ctx_with(&TEST_FD_OPS_NO_SECURITY_REVISION);
+
+        let cc = update_security_revision_cc(&mut fd_ctx, ComponentClassification::Firmware);
+
+        assert_eq!(
+            cc,
+            FwUpdateCompletionCode::UpdateSecurityRevisionNotPermitted as u8
+        );
+    }
+
+    #[test]
+    fn test_update_security_revision_invalid_state() {
+        let mut fd_ctx = new_test_fd_ctx();
+        fd_ctx.internal.set_fd_state(FirmwareDeviceState::Download);
+
+        let cc = update_security_revision_cc(&mut fd_ctx, ComponentClassification::Firmware);
+
+        assert_eq!(cc, FwUpdateCompletionCode::InvalidStateForCommand as u8);
+    }
+
+    /// 0xFFFF means the component is on a device behind a proxy. This FD
+    /// has no proxy commands, so the request is refused and the callback
+    /// never runs.
+    #[test]
+    fn test_update_security_revision_downstream_device_refused() {
+        let mut fd_ctx = new_test_fd_ctx();
+
+        let cc =
+            update_security_revision_cc(&mut fd_ctx, ComponentClassification::DownstreamDevice);
+
+        assert_eq!(cc, PldmBaseCompletionCode::InvalidData as u8);
     }
 
     #[test]
@@ -1951,11 +2124,11 @@ mod tests {
 
     // Sends one ActivatePendingComponentImage request and returns the response
     // length, completion code and estimated time.
-    fn activate_pending_component(ops: &'static TestFdOps) -> (usize, u8, u16) {
+    fn activate_pending_component_image(ops: &'static TestFdOps) -> (usize, u8, u16) {
         let mut fd_ctx = fd_ctx_with(ops);
         let mut buffer = [0u8; 256];
 
-        let req = ActivatePendingComponentRequest::new(
+        let req = ActivatePendingComponentImageRequest::new(
             1,
             PldmMsgType::Request,
             ComponentClassification::Firmware,
@@ -1964,31 +2137,34 @@ mod tests {
         );
         req.encode(&mut buffer).unwrap();
 
-        let bytes = fd_ctx.activate_pending_component_rsp(&mut buffer).unwrap();
-        let resp = ActivatePendingComponentResponse::decode(&buffer[..bytes]).unwrap();
+        let bytes = fd_ctx
+            .activate_pending_component_image_rsp(&mut buffer)
+            .unwrap();
+        let resp = ActivatePendingComponentImageResponse::decode(&buffer[..bytes]).unwrap();
         // The response is `#[repr(packed)]`, so the fields are copied out here:
         // the callers cannot take a reference to them.
         (bytes, resp.completion_code, resp.estimated_time_activation)
     }
 
     #[test]
-    fn test_activate_pending_component_success() {
-        let (bytes, completion_code, estimated_time) = activate_pending_component(&TEST_FD_OPS);
+    fn test_activate_pending_component_image_success() {
+        let (bytes, completion_code, estimated_time) =
+            activate_pending_component_image(&TEST_FD_OPS);
         assert_eq!(
             bytes,
-            core::mem::size_of::<ActivatePendingComponentResponse>()
+            core::mem::size_of::<ActivatePendingComponentImageResponse>()
         );
         assert_eq!(completion_code, PldmBaseCompletionCode::Success as u8);
         assert_eq!(estimated_time, TEST_PENDING_ACTIVATION_SECS);
     }
 
     #[test]
-    fn test_activate_pending_component_not_required() {
+    fn test_activate_pending_component_image_not_required() {
         let (bytes, completion_code, estimated_time) =
-            activate_pending_component(&TEST_FD_OPS_NO_PENDING_IMAGE);
+            activate_pending_component_image(&TEST_FD_OPS_NO_PENDING_IMAGE);
         assert_eq!(
             bytes,
-            core::mem::size_of::<ActivatePendingComponentResponse>()
+            core::mem::size_of::<ActivatePendingComponentImageResponse>()
         );
         assert_eq!(
             completion_code,
@@ -2001,11 +2177,11 @@ mod tests {
     // used here would answer `ActivatePendingImageNotPermitted`, so the
     // completion code also shows the callback never ran.
     #[test]
-    fn test_activate_pending_component_downstream_device_refused() {
+    fn test_activate_pending_component_image_downstream_device_refused() {
         let mut fd_ctx = fd_ctx_with(&TEST_FD_OPS_REJECT_PENDING);
         let mut buffer = [0u8; 256];
 
-        let req = ActivatePendingComponentRequest::new(
+        let req = ActivatePendingComponentImageRequest::new(
             1,
             PldmMsgType::Request,
             ComponentClassification::DownstreamDevice,
@@ -2014,18 +2190,18 @@ mod tests {
         );
         req.encode(&mut buffer).unwrap();
 
-        let result = fd_ctx.activate_pending_component_rsp(&mut buffer);
+        let result = fd_ctx.activate_pending_component_image_rsp(&mut buffer);
         assert!(result.is_ok());
         assert_eq!(buffer[3], PldmBaseCompletionCode::InvalidData as u8);
     }
 
     #[test]
-    fn test_activate_pending_component_rejected() {
+    fn test_activate_pending_component_image_rejected() {
         let (bytes, completion_code, estimated_time) =
-            activate_pending_component(&TEST_FD_OPS_REJECT_PENDING);
+            activate_pending_component_image(&TEST_FD_OPS_REJECT_PENDING);
         assert_eq!(
             bytes,
-            core::mem::size_of::<ActivatePendingComponentResponse>()
+            core::mem::size_of::<ActivatePendingComponentImageResponse>()
         );
         assert_eq!(
             completion_code,

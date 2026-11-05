@@ -24,7 +24,7 @@ jobs:
        run: cargo fmt --all -- --check
      - name: clippy (deny warnings)
        run: |
-         cargo clippy --all-targets --all-features -- -D warnings
+         cargo clippy --all-targets --all-features --workspace -- -D warnings
 
   build:
     runs-on: ubuntu-latest
