@@ -26,7 +26,7 @@ pub const UA_EID: u8 = 8; // Update Agent Endpoint ID for testing.
 pub static PLDM_PROTOCOL_CAPABILITIES: [ProtocolCapability<'static>; PLDM_PROTOCOL_CAP_COUNT] = [
     ProtocolCapability {
         pldm_type: PldmSupportedType::Base,
-        protocol_version: 0xF1F1F000, //"1.1.0"
+        protocol_version: 0xF1F2F000, //"1.2.0"
         supported_commands: &[
             PldmControlCmd::SetTid as u8,
             PldmControlCmd::GetTid as u8,

@@ -39,6 +39,26 @@ pub enum PldmError {
     InvalidApplyResult,
     InvalidGetStatusReasonCode,
     InvalidAuxStateStatus,
+
+    // PLDM Type 2, Platform Monitoring and Control (DSP0248).
+    InvalidSensorDataSize,
+    InvalidSensorOperationalState,
+    InvalidSensorEventMessageEnable,
+    InvalidSensorInit,
+    InvalidPdrRepositoryState,
+    InvalidPdrValidity,
+    InvalidTerminusLocatorType,
+    InvalidPdrType,
+    InvalidEventMessageGlobalEnable,
+    InvalidSynchronyConfiguration,
+    InvalidPlatformEventClass,
+    InvalidTransportProtocolType,
+    InvalidLogOperationalStatus,
+    InvalidLogClearingPolicy,
+    InvalidEnableLogging,
+    InvalidLogUpdateEvent,
+    InvalidSplitEntry,
+    InvalidEntrySearchType,
 }
 
 #[derive(Debug, Clone, PartialEq)]

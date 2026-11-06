@@ -10,4 +10,5 @@ license.workspace = true
 [dependencies]
 zerocopy.workspace = true
 bitfield.workspace = true
+crc.workspace = true
 
