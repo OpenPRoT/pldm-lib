@@ -533,7 +533,10 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
             );
         }
 
-        let req = UpdateSecurityRevisionRequest::decode(payload).map_err(MsgHandlerError::Codec)?;
+        let req = match UpdateSecurityRevisionRequest::decode(payload) {
+            Ok(req) => req,
+            Err(e) => return generate_failure_response(payload, decode_failure_code(e)),
+        };
 
         let mut firmware_params = FirmwareParameters::default();
         if let Some(len) =
@@ -1833,6 +1836,34 @@ mod tests {
             update_security_revision_cc(&mut fd_ctx, ComponentClassification::DownstreamDevice);
 
         assert_eq!(cc, PldmBaseCompletionCode::InvalidData as u8);
+    }
+
+    #[test]
+    fn test_update_security_revision_truncated_request_gets_invalid_length() {
+        let mut fd_ctx = new_test_fd_ctx();
+        let mut buffer = [0u8; 256];
+        UpdateSecurityRevisionRequest::new(
+            UPDATE_SECURITY_REVISION_INSTANCE_ID,
+            PldmMsgType::Request,
+            ComponentClassification::Firmware,
+            2,
+            3,
+        )
+        .encode(&mut buffer)
+        .unwrap();
+
+        let truncated = &mut buffer[..PLDM_FAILURE_RESP_LEN];
+        let len = fd_ctx.update_security_revision_rsp(truncated).unwrap();
+        assert_eq!(len, PLDM_FAILURE_RESP_LEN);
+
+        let resp_header = PldmMsgHeader::decode(&buffer).unwrap();
+        assert!(!resp_header.is_request());
+        assert_eq!(
+            resp_header.instance_id(),
+            UPDATE_SECURITY_REVISION_INSTANCE_ID
+        );
+        assert_eq!(buffer[3], PldmBaseCompletionCode::InvalidLength as u8);
+        assert_eq!(fd_ctx.internal.get_fd_state(), FirmwareDeviceState::Idle);
     }
 
     #[test]
