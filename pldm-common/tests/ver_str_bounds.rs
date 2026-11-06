@@ -24,6 +24,9 @@ use pldm_common::message::firmware_update::get_fw_params::{
 use pldm_common::message::firmware_update::pass_component::{
     PassComponentTableRequest, PassComponentTableRequestFixed,
 };
+use pldm_common::message::firmware_update::query_downstream::{
+    CapabilitiesDuringUpdate, DownstreamDeviceParameterTable, PldmTimeStamp,
+};
 use pldm_common::message::firmware_update::request_update::{
     RequestUpdateRequest, RequestUpdateRequestFixed,
 };
@@ -32,7 +35,8 @@ use pldm_common::message::firmware_update::update_component::{
 };
 use pldm_common::protocol::base::PldmMsgType;
 use pldm_common::protocol::firmware_update::{
-    ComponentParameterEntry, ComponentParameterEntryFixed, PldmFirmwareString, MAX_COMPONENT_COUNT,
+    ComponentActivationMethods, ComponentParameterEntry, ComponentParameterEntryFixed, Descriptor,
+    PldmFirmwareString, DESCRIPTOR_DATA_MAX_LEN, MAX_COMPONENT_COUNT,
     PLDM_FWUP_IMAGE_SET_VER_STR_MAX_LEN,
 };
 use zerocopy::{FromZeros, Immutable, IntoBytes};
@@ -320,4 +324,99 @@ fn fw_params_max_components_round_trip() {
     let mut out = vec![0u8; buf.len()];
     let n = params.encode(&mut out).unwrap();
     assert_eq!(&out[..n], &buf[..]);
+}
+
+/// Site 12: `Descriptor::decode` reads a `u16` length into a
+/// `DESCRIPTOR_DATA_MAX_LEN` (64) byte array.
+fn descriptor_wire(len: u16, tail: usize) -> Vec<u8> {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&0xFFFFu16.to_le_bytes()); // descriptor_type
+    buf.extend_from_slice(&len.to_le_bytes()); // descriptor_length
+    buf.resize(buf.len() + tail, 0);
+    buf
+}
+
+#[test]
+fn descriptor_rejects_over_long_data() {
+    for len in [DESCRIPTOR_DATA_MAX_LEN + 1, 255, u16::MAX as usize] {
+        assert_eq!(
+            Descriptor::decode(&descriptor_wire(len as u16, 1024)),
+            Err(PldmCodecError::InvalidData),
+            "descriptor length {len} must be rejected, not panic"
+        );
+    }
+}
+
+#[test]
+fn descriptor_accepts_max_len_data() {
+    let buf = descriptor_wire(DESCRIPTOR_DATA_MAX_LEN as u16, DESCRIPTOR_DATA_MAX_LEN);
+    let desc = Descriptor::decode(&buf).unwrap();
+    assert_eq!(desc.descriptor_length as usize, DESCRIPTOR_DATA_MAX_LEN);
+}
+
+/// Sites 13 and 14: `DownstreamDeviceParameterTable::decode`, active and
+/// pending component version strings. The table has no zerocopy struct, so
+/// the fields are written in wire order here.
+fn downstream_table_wire(active_len: u8, pending_len: u8, tail: usize) -> Vec<u8> {
+    let date = [0u8; core::mem::size_of::<PldmTimeStamp>()];
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&0u16.to_le_bytes()); // downstream_device_index
+    buf.extend_from_slice(&0u32.to_le_bytes()); // active comparison stamp
+    buf.push(1); // active version string type
+    buf.push(active_len); // active version string length
+    buf.extend_from_slice(&date); // active release date
+    buf.extend_from_slice(&0u32.to_le_bytes()); // pending comparison stamp
+    buf.push(1); // pending version string type
+    buf.push(pending_len); // pending version string length
+    buf.extend_from_slice(&date); // pending release date
+    buf.extend_from_slice(&[0u8; core::mem::size_of::<ComponentActivationMethods>()]);
+    buf.extend_from_slice(&[0u8; core::mem::size_of::<CapabilitiesDuringUpdate>()]);
+    buf.resize(buf.len() + tail, 0);
+    buf
+}
+
+#[test]
+fn downstream_table_rejects_over_long_active_ver_str() {
+    for len in [MAX_LEN + 1, 64, 255] {
+        assert_eq!(
+            DownstreamDeviceParameterTable::decode(&downstream_table_wire(len as u8, 0, 512)),
+            Err(PldmCodecError::InvalidData),
+            "active wire length {len} must be rejected, not panic"
+        );
+    }
+}
+
+#[test]
+fn downstream_table_rejects_over_long_pending_ver_str() {
+    for len in [MAX_LEN + 1, 64, 255] {
+        assert_eq!(
+            DownstreamDeviceParameterTable::decode(&downstream_table_wire(8, len as u8, 512)),
+            Err(PldmCodecError::InvalidData),
+            "pending wire length {len} must be rejected, not panic"
+        );
+    }
+}
+
+#[test]
+fn downstream_table_short_strings_report_buffer_too_short() {
+    // The lengths fit the destination, but the strings are not all there.
+    let buf = downstream_table_wire(MAX_LEN as u8, MAX_LEN as u8, MAX_LEN + 4);
+    assert_eq!(
+        DownstreamDeviceParameterTable::decode(&buf),
+        Err(PldmCodecError::BufferTooShort)
+    );
+}
+
+#[test]
+fn downstream_table_accepts_max_len_strings() {
+    let buf = downstream_table_wire(MAX_LEN as u8, MAX_LEN as u8, 2 * MAX_LEN);
+    let table = DownstreamDeviceParameterTable::decode(&buf).unwrap();
+    assert_eq!(
+        table.active_component_version_string.str_len as usize,
+        MAX_LEN
+    );
+    assert_eq!(
+        table.pending_component_version_string.str_len as usize,
+        MAX_LEN
+    );
 }
