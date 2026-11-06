@@ -483,7 +483,7 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
         }
 
         // Decode the request message
-        let req = match ActivatePendingComponentRequest::decode(payload) {
+        let req = match ActivatePendingComponentImageRequest::decode(payload) {
             Ok(req) => req,
             Err(e) => return generate_failure_response(payload, decode_failure_code(e)),
         };
