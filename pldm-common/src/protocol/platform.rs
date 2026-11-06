@@ -33,6 +33,10 @@ use zerocopy::{FromBytes, Immutable, IntoBytes};
 ///
 /// DSP0248 clause 30, Table 110. Only the commands OpenPRoT answers are
 /// listed; a request carrying any other code is rejected before dispatch.
+///
+/// SetPLDMEventLogPolicy (0x47) is absent on purpose. DSP0248 Table 56
+/// requires it only where the log has configurable policy parameters, and
+/// this responder reports none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum PldmPlatformCmd {
@@ -91,7 +95,8 @@ impl TryFrom<u8> for PldmPlatformCmd {
 /// Multipart transfer position, DSP0248 Table 69.
 ///
 /// These values differ from the DSP0267 `TransferRespFlag` of the firmware
-/// update type, whose `Start` is `0x01`. Type 2 must not reuse that type.
+/// update type, whose `Start` is `0x01`. Type 2 reuses neither that type nor
+/// its error variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum PlatformTransferFlag {
@@ -110,7 +115,7 @@ impl TryFrom<u8> for PlatformTransferFlag {
             0x01 => Ok(PlatformTransferFlag::Middle),
             0x04 => Ok(PlatformTransferFlag::End),
             0x05 => Ok(PlatformTransferFlag::StartAndEnd),
-            _ => Err(PldmError::InvalidTransferRespFlag),
+            _ => Err(PldmError::InvalidPlatformTransferFlag),
         }
     }
 }
@@ -145,7 +150,7 @@ impl TryFrom<u8> for PlatformTransferOperationFlag {
             0x00 => Ok(PlatformTransferOperationFlag::GetNextPart),
             0x01 => Ok(PlatformTransferOperationFlag::GetFirstPart),
             0x02 => Ok(PlatformTransferOperationFlag::AcknowledgementOnly),
-            _ => Err(PldmError::InvalidTransferOpFlag),
+            _ => Err(PldmError::InvalidPlatformTransferOperationFlag),
         }
     }
 }
@@ -1083,7 +1088,7 @@ mod test {
         // 0x02 and 0x03 are unassigned in Table 69.
         assert_eq!(
             PlatformTransferFlag::try_from(0x02),
-            Err(PldmError::InvalidTransferRespFlag)
+            Err(PldmError::InvalidPlatformTransferFlag)
         );
     }
 
@@ -1107,7 +1112,7 @@ mod test {
         );
         assert_eq!(
             PlatformTransferOperationFlag::try_from(0x03),
-            Err(PldmError::InvalidTransferOpFlag)
+            Err(PldmError::InvalidPlatformTransferOperationFlag)
         );
     }
 

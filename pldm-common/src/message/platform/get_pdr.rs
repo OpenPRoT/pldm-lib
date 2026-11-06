@@ -565,4 +565,14 @@ mod test {
             Err(PldmCodecError::Unsupported)
         );
     }
+
+    #[test]
+    fn test_max_record_data_len_reserves_the_fixed_part_and_the_crc_byte() {
+        // 7 record bytes, the fixed part and the CRC byte fill the buffer
+        // exactly; a buffer that cannot hold even the fixed part yields
+        // zero rather than wrapping.
+        assert_eq!(max_record_data_len(GET_PDR_RESPONSE_FIXED_LEN + 1 + 7), 7);
+        assert_eq!(max_record_data_len(GET_PDR_RESPONSE_FIXED_LEN), 0);
+        assert_eq!(max_record_data_len(0), 0);
+    }
 }

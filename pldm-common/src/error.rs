@@ -59,6 +59,8 @@ pub enum PldmError {
     InvalidLogUpdateEvent,
     InvalidSplitEntry,
     InvalidEntrySearchType,
+    InvalidPlatformTransferFlag,
+    InvalidPlatformTransferOperationFlag,
 }
 
 #[derive(Debug, Clone, PartialEq)]

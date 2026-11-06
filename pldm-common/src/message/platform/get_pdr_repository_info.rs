@@ -16,7 +16,8 @@
 
 use crate::error::PldmError;
 use crate::protocol::base::{
-    InstanceId, PldmMsgHeader, PldmMsgType, PldmSupportedType, PLDM_MSG_HEADER_LEN,
+    InstanceId, PldmBaseCompletionCode, PldmMsgHeader, PldmMsgType, PldmSupportedType,
+    PLDM_MSG_HEADER_LEN,
 };
 use crate::protocol::platform::{PdrRepositoryState, PldmPlatformCmd, Timestamp104};
 use zerocopy::{FromBytes, Immutable, IntoBytes};
@@ -74,6 +75,13 @@ pub struct PdrRepositoryInfo {
     pub data_transfer_handle_timeout: u8,
 }
 
+/// The success response, DSP0248 Table 68.
+///
+/// A failure carries the header and the completion code alone, so a
+/// responder answers it with
+/// [`crate::protocol::base::PldmFailureResponse`]. A requester decodes that
+/// shape first and this struct only on `Success`, as
+/// [`super::get_pdr::GetPdrResponse`] does.
 #[derive(Debug, Clone, FromBytes, IntoBytes, Immutable, PartialEq)]
 #[repr(C, packed)]
 pub struct GetPdrRepositoryInfoResponse {
@@ -91,7 +99,7 @@ pub struct GetPdrRepositoryInfoResponse {
 }
 
 impl GetPdrRepositoryInfoResponse {
-    pub fn new(instance_id: InstanceId, completion_code: u8, info: &PdrRepositoryInfo) -> Self {
+    pub fn new(instance_id: InstanceId, info: &PdrRepositoryInfo) -> Self {
         GetPdrRepositoryInfoResponse {
             hdr: PldmMsgHeader::new(
                 instance_id,
@@ -99,7 +107,7 @@ impl GetPdrRepositoryInfoResponse {
                 PldmSupportedType::Platform,
                 PldmPlatformCmd::GetPdrRepositoryInfo as u8,
             ),
-            completion_code,
+            completion_code: PldmBaseCompletionCode::Success as u8,
             repository_state: info.repository_state as u8,
             update_time: info.update_time,
             oem_update_time: info.oem_update_time,
@@ -123,6 +131,7 @@ impl GetPdrRepositoryInfoResponse {
 mod test {
     use super::*;
     use crate::codec::{PldmCodec, PldmCodecError};
+    use crate::protocol::base::PldmFailureResponse;
 
     fn sample_info() -> PdrRepositoryInfo {
         let mut update_time = Timestamp104::unknown();
@@ -165,7 +174,7 @@ mod test {
     #[test]
     fn test_response_roundtrip() {
         let info = sample_info();
-        let response = GetPdrRepositoryInfoResponse::new(1, 0, &info);
+        let response = GetPdrRepositoryInfoResponse::new(1, &info);
 
         let mut buffer = [0u8; GET_PDR_REPOSITORY_INFO_RESPONSE_LEN];
         assert_eq!(
@@ -194,7 +203,7 @@ mod test {
 
     #[test]
     fn test_response_rejects_short_buffer() {
-        let response = GetPdrRepositoryInfoResponse::new(1, 0, &sample_info());
+        let response = GetPdrRepositoryInfoResponse::new(1, &sample_info());
         let mut buffer = [0u8; GET_PDR_REPOSITORY_INFO_RESPONSE_LEN - 1];
         assert_eq!(
             response.encode(&mut buffer),
@@ -204,9 +213,25 @@ mod test {
 
     #[test]
     fn test_response_rejects_illegal_repository_state() {
-        let mut response = GetPdrRepositoryInfoResponse::new(1, 0, &sample_info());
+        let mut response = GetPdrRepositoryInfoResponse::new(1, &sample_info());
         // 3 is one past `failed`, the last value Table 68 defines.
         response.repository_state = 3;
         assert!(response.repository_state().is_err());
+    }
+
+    #[test]
+    fn test_failure_reply_is_too_short_for_the_full_response() {
+        let failure = PldmFailureResponse::new(
+            1,
+            PldmSupportedType::Platform,
+            PldmPlatformCmd::GetPdrRepositoryInfo as u8,
+            PldmBaseCompletionCode::Error as u8,
+        );
+        let mut buffer = [0u8; PLDM_MSG_HEADER_LEN + 1];
+        let len = failure.encode(&mut buffer).unwrap();
+        assert_eq!(
+            GetPdrRepositoryInfoResponse::decode(&buffer[..len]),
+            Err(PldmCodecError::BufferTooShort)
+        );
     }
 }

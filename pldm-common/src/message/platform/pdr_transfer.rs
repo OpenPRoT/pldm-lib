@@ -18,10 +18,11 @@
 //! requested record up in whatever repository it owns and passes it in, which
 //! keeps this crate free of any storage or platform dependency.
 
+use crate::codec::PldmCodecError;
 use crate::message::platform::get_pdr::{
-    GetPdrRequest, DATA_TRANSFER_HANDLE_NONE, RECORD_HANDLE_NONE,
+    GetPdrRequest, GetPdrResponse, DATA_TRANSFER_HANDLE_NONE, RECORD_HANDLE_NONE,
 };
-use crate::protocol::base::PldmBaseCompletionCode;
+use crate::protocol::base::{InstanceId, PldmBaseCompletionCode};
 use crate::protocol::platform::{
     GetPdrCompletionCode, PdrRepositoryState, PlatformTransferFlag, PlatformTransferOperationFlag,
 };
@@ -44,7 +45,7 @@ pub struct PdrRecord<'a> {
     pub data: &'a [u8],
 }
 
-/// One response part, ready for [`super::get_pdr::GetPdrResponse::new`].
+/// One response part, ready for [`GetPdrResponse::from_part`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PdrTransferPart<'a> {
     pub next_record_handle: u32,
@@ -54,22 +55,43 @@ pub struct PdrTransferPart<'a> {
     pub transfer_crc: Option<u8>,
 }
 
+impl<'a> GetPdrResponse<'a> {
+    /// Builds the response that carries `part`.
+    ///
+    /// # Errors
+    ///
+    /// See [`GetPdrResponse::new`].
+    pub fn from_part(
+        instance_id: InstanceId,
+        part: &PdrTransferPart<'a>,
+    ) -> Result<Self, PldmCodecError> {
+        Self::new(
+            instance_id,
+            part.next_record_handle,
+            part.next_data_transfer_handle,
+            part.transfer_flag,
+            part.record_data,
+            part.transfer_crc,
+        )
+    }
+}
+
 /// Why a GetPDR request cannot be answered with record data.
 ///
 /// Table 69 lists both the shared base codes and six codes of its own, so a
-/// single enumeration cannot carry them; the caller writes
-/// [`GetPdrError::completion_code`] into a failure response.
+/// single enumeration cannot carry them; the caller converts it with
+/// `u8::from` and writes the result into a failure response.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GetPdrError {
     Base(PldmBaseCompletionCode),
     Command(GetPdrCompletionCode),
 }
 
-impl GetPdrError {
-    pub fn completion_code(&self) -> u8 {
-        match self {
-            GetPdrError::Base(code) => *code as u8,
-            GetPdrError::Command(code) => *code as u8,
+impl From<GetPdrError> for u8 {
+    fn from(error: GetPdrError) -> u8 {
+        match error {
+            GetPdrError::Base(code) => code as u8,
+            GetPdrError::Command(code) => code as u8,
         }
     }
 }
@@ -317,24 +339,6 @@ mod test {
     const NEXT_RECORD_HANDLE: u32 = 0x0000_0006;
     const CHANGE_NUMBER: u16 = 0x0042;
 
-    /// Reference CRC-8, polynomial x^8 + x^2 + x^1 + 1, most-significant bit
-    /// first. Recomputed here so the assertion encodes the specification
-    /// rather than whatever the implementation happens to return.
-    fn crc8_reference(data: &[u8]) -> u8 {
-        let mut crc: u8 = 0x00;
-        for byte in data {
-            crc ^= byte;
-            for _ in 0..8 {
-                crc = if crc & 0x80 != 0 {
-                    (crc << 1) ^ 0x07
-                } else {
-                    crc << 1
-                };
-            }
-        }
-        crc
-    }
-
     fn record() -> PdrRecord<'static> {
         PdrRecord {
             record_handle: RECORD_HANDLE,
@@ -454,7 +458,9 @@ mod test {
             .unwrap();
         assert_eq!(last.transfer_flag, PlatformTransferFlag::End);
         assert_eq!(last.record_data, &RECORD_DATA[8..]);
-        assert_eq!(last.transfer_crc, Some(crc8_reference(&RECORD_DATA)));
+        // util::crc pins the algorithm against the DSP0248 reference; this
+        // asserts the input is the whole record rather than the last part.
+        assert_eq!(last.transfer_crc, Some(transfer_crc(&RECORD_DATA)));
         assert_eq!(last.next_data_transfer_handle, DATA_TRANSFER_HANDLE_NONE);
         // Every part names the same following record, Table 69.
         assert_eq!(last.next_record_handle, NEXT_RECORD_HANDLE);
@@ -858,13 +864,15 @@ mod test {
             )
             .unwrap_err();
         assert_eq!(error, GetPdrError::Base(PldmBaseCompletionCode::Error));
-        assert_eq!(error.completion_code(), PldmBaseCompletionCode::Error as u8);
+        assert_eq!(u8::from(error), PldmBaseCompletionCode::Error as u8);
     }
 
     #[test]
     fn test_completion_code_of_a_command_error() {
         assert_eq!(
-            GetPdrError::Command(GetPdrCompletionCode::InvalidRecordHandle).completion_code(),
+            u8::from(GetPdrError::Command(
+                GetPdrCompletionCode::InvalidRecordHandle
+            )),
             0x82
         );
     }
