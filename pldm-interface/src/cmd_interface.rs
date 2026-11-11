@@ -20,6 +20,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use pldm_common::codec::{PldmCodec, PldmCodecError};
 use pldm_common::protocol::base::{
     PldmBaseCompletionCode, PldmControlCmd, PldmFailureResponse, PldmMsgHeader, PldmSupportedType,
+    PLDM_MSG_HEADER_LEN,
 };
 use pldm_common::protocol::firmware_update::FwUpdateCmd;
 use pldm_common::util::mctp_transport::{
@@ -28,14 +29,47 @@ use pldm_common::util::mctp_transport::{
 
 pub type PldmCompletionErrorCode = u8;
 
+// Map a handler error to the completion code sent to the requester, so a
+// failure the requester can act on (e.g. NOT_READY) is not flattened into a
+// generic ERROR. Exhaustive so a new `MsgHandlerError` variant forces a choice.
+fn handler_error_code(e: &MsgHandlerError) -> u8 {
+    let code = match e {
+        MsgHandlerError::NotReady => PldmBaseCompletionCode::NotReady,
+        MsgHandlerError::Codec(PldmCodecError::BufferTooShort) => {
+            PldmBaseCompletionCode::InvalidLength
+        }
+        MsgHandlerError::Codec(PldmCodecError::InvalidData | PldmCodecError::Unsupported) => {
+            PldmBaseCompletionCode::InvalidData
+        }
+        MsgHandlerError::PldmCommon(_)
+        | MsgHandlerError::Util(_)
+        | MsgHandlerError::FdOps(_)
+        | MsgHandlerError::FdInitiatorModeError
+        | MsgHandlerError::T1Timeout => PldmBaseCompletionCode::Error,
+    };
+    code as u8
+}
+
 // Helper function to write a failure response message into payload
 pub(crate) fn generate_failure_response(
     payload: &mut [u8],
     completion_code: u8,
 ) -> Result<usize, MsgHandlerError> {
     let header = PldmMsgHeader::decode(payload).map_err(MsgHandlerError::Codec)?;
+    write_failure_response(&header, payload, completion_code)
+}
+
+// Write a failure response for the request described by `req_hdr` into payload.
+// Takes the header by value so the caller can use a copy saved before a handler
+// ran, since handlers decode and encode in `payload` and may leave it partly
+// overwritten when they fail.
+fn write_failure_response(
+    req_hdr: &PldmMsgHeader<[u8; PLDM_MSG_HEADER_LEN]>,
+    payload: &mut [u8],
+    completion_code: u8,
+) -> Result<usize, MsgHandlerError> {
     let resp = PldmFailureResponse {
-        hdr: header.into_response(),
+        hdr: req_hdr.into_response(),
         completion_code,
     };
     resp.encode(payload).map_err(MsgHandlerError::Codec)
@@ -132,6 +166,16 @@ impl<'a, O: FdOps> CmdInterface<'a, O> {
             }
         };
 
+        // Save the request header now: a handler may overwrite part of `payload`
+        // with a response before it fails.
+        let req_hdr = match PldmMsgHeader::decode(payload) {
+            Ok(hdr) => hdr,
+            Err(e) => {
+                self.busy.store(false, Ordering::SeqCst);
+                return Err(MsgHandlerError::Codec(e));
+            }
+        };
+
         let resp_len = match pldm_type {
             PldmSupportedType::Base => self.process_control_cmd(cmd_opcode, payload),
             PldmSupportedType::FwUpdate => self.process_fw_update_cmd(cmd_opcode, payload),
@@ -144,7 +188,13 @@ impl<'a, O: FdOps> CmdInterface<'a, O> {
 
         match resp_len {
             Ok(bytes) => Ok(reserved_len + bytes),
-            Err(e) => Err(e),
+            // Answer the requester instead of leaving it waiting, with a code
+            // that reflects the error kind. If the failure response cannot be
+            // written (e.g. buffer too small), return the original error.
+            Err(e) => match write_failure_response(&req_hdr, payload, handler_error_code(&e)) {
+                Ok(bytes) => Ok(reserved_len + bytes),
+                Err(_) => Err(e),
+            },
         }
     }
 
@@ -153,7 +203,7 @@ impl<'a, O: FdOps> CmdInterface<'a, O> {
         cmd_opcode: u8,
         payload: &mut [u8],
     ) -> Result<usize, MsgHandlerError> {
-        let result = match PldmControlCmd::try_from(cmd_opcode) {
+        match PldmControlCmd::try_from(cmd_opcode) {
             Ok(cmd) => match cmd {
                 PldmControlCmd::GetTid => self.ctrl_ctx.get_tid_rsp(payload),
                 PldmControlCmd::SetTid => self.ctrl_ctx.set_tid_rsp(payload),
@@ -164,12 +214,7 @@ impl<'a, O: FdOps> CmdInterface<'a, O> {
             Err(_) => {
                 generate_failure_response(payload, PldmBaseCompletionCode::UnsupportedPldmCmd as u8)
             }
-        };
-
-        // Catch-all: turns an unhandled `Err` (e.g. an FdOps failure with no
-        // specific error path) into a generic failure response instead of
-        // letting it propagate and kill the responder loop.
-        result.or_else(|_| generate_failure_response(payload, PldmBaseCompletionCode::Error as u8))
+        }
     }
 
     fn process_fw_update_cmd(
@@ -177,7 +222,7 @@ impl<'a, O: FdOps> CmdInterface<'a, O> {
         cmd_opcode: u8,
         payload: &mut [u8],
     ) -> Result<usize, MsgHandlerError> {
-        let result = match FwUpdateCmd::try_from(cmd_opcode) {
+        match FwUpdateCmd::try_from(cmd_opcode) {
             Ok(cmd) => match cmd {
                 FwUpdateCmd::QueryDeviceIdentifiers => self.fd_ctx.query_devid_rsp(payload),
                 FwUpdateCmd::GetFirmwareParameters => {
@@ -207,9 +252,7 @@ impl<'a, O: FdOps> CmdInterface<'a, O> {
             Err(_) => {
                 generate_failure_response(payload, PldmBaseCompletionCode::UnsupportedPldmCmd as u8)
             }
-        };
-
-        result.or_else(|_| generate_failure_response(payload, PldmBaseCompletionCode::Error as u8))
+        }
     }
 
     fn preprocess_request(
@@ -241,6 +284,8 @@ impl<'a, O: FdOps> CmdInterface<'a, O> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::firmware_device::fd_ops::FdOpsError;
+    use pldm_common::protocol::base::PLDM_FAILURE_RESP_LEN;
 
     #[test]
     fn test_decode_failure_code() {
@@ -256,5 +301,74 @@ mod tests {
             decode_failure_code(PldmCodecError::Unsupported),
             PldmBaseCompletionCode::InvalidData as u8
         );
+    }
+
+    #[test]
+    fn handler_error_code_maps_each_kind() {
+        let code = |e| handler_error_code(&e);
+        assert_eq!(
+            code(MsgHandlerError::NotReady),
+            PldmBaseCompletionCode::NotReady as u8
+        );
+        assert_eq!(
+            code(MsgHandlerError::Codec(PldmCodecError::BufferTooShort)),
+            PldmBaseCompletionCode::InvalidLength as u8
+        );
+        assert_eq!(
+            code(MsgHandlerError::Codec(PldmCodecError::InvalidData)),
+            PldmBaseCompletionCode::InvalidData as u8
+        );
+        assert_eq!(
+            code(MsgHandlerError::Codec(PldmCodecError::Unsupported)),
+            PldmBaseCompletionCode::InvalidData as u8
+        );
+        assert_eq!(
+            code(MsgHandlerError::FdOps(FdOpsError::ApplyError)),
+            PldmBaseCompletionCode::Error as u8
+        );
+        assert_eq!(
+            code(MsgHandlerError::T1Timeout),
+            PldmBaseCompletionCode::Error as u8
+        );
+        assert_eq!(
+            code(MsgHandlerError::FdInitiatorModeError),
+            PldmBaseCompletionCode::Error as u8
+        );
+    }
+
+    #[test]
+    fn failure_response_uses_saved_header_not_payload() {
+        let hdr = PldmMsgHeader::new(
+            0x07,
+            pldm_common::protocol::base::PldmMsgType::Request,
+            PldmSupportedType::FwUpdate,
+            FwUpdateCmd::RequestUpdate as u8,
+        );
+        // Payload no longer holds the request header, as after a failed handler.
+        let mut payload = [0xFFu8; 8];
+        let len = write_failure_response(&hdr, &mut payload, PldmBaseCompletionCode::Error as u8)
+            .unwrap();
+        assert_eq!(len, PLDM_FAILURE_RESP_LEN);
+
+        let resp = PldmFailureResponse::decode(&payload[..len]).unwrap();
+        assert_eq!(resp.hdr.instance_id(), 0x07);
+        assert_eq!(resp.hdr.cmd_code(), FwUpdateCmd::RequestUpdate as u8);
+        assert!(!resp.hdr.is_request());
+        assert_eq!(
+            { resp.completion_code },
+            PldmBaseCompletionCode::Error as u8
+        );
+    }
+
+    #[test]
+    fn failure_response_buffer_too_short() {
+        let hdr = PldmMsgHeader::new(
+            0x01,
+            pldm_common::protocol::base::PldmMsgType::Request,
+            PldmSupportedType::Base,
+            PldmControlCmd::GetTid as u8,
+        );
+        let mut payload = [0u8; PLDM_FAILURE_RESP_LEN - 1];
+        assert!(write_failure_response(&hdr, &mut payload, 0x01).is_err());
     }
 }
