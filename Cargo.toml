@@ -21,6 +21,9 @@ license = "Apache-2.0"
 pldm-common = { path = "pldm-common" }
 pldm-interface = { path = "pldm-interface" }
 bitfield = "0.14.0"
+# CRC-8 for the DSP0248 transferCRC. Pinned to the version already locked by
+# the OpenPRoT firmware tree so both resolve to one copy.
+crc = { version = "3.4.0", default-features = false }
 zerocopy = { version = "0.8.17", features = ["derive"] }
 
 [dependencies]

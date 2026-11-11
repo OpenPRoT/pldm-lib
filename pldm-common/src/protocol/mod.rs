@@ -14,4 +14,5 @@
 
 pub mod base;
 pub mod firmware_update;
+pub mod platform;
 pub mod version;
