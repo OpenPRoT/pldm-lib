@@ -125,12 +125,12 @@ impl FirmwareParameters {
         }
         bytes += self.params_fixed.active_comp_image_set_ver_str_len as usize;
 
-        for comp in self
+        for entry in self
             .comp_param_table
             .iter()
             .take(self.params_fixed.comp_count as usize)
         {
-            bytes += comp.codec_size_in_bytes();
+            bytes += entry.codec_size_in_bytes();
         }
         bytes
     }
@@ -158,12 +158,13 @@ impl PldmCodec for FirmwareParameters {
             offset += len;
         }
 
-        for comp in self
+        // Like decode, reject a count the table cannot hold.
+        let entries = self
             .comp_param_table
-            .iter()
-            .take(self.params_fixed.comp_count as usize)
-        {
-            let bytes = comp.encode(&mut buffer[offset..])?;
+            .get(..self.params_fixed.comp_count as usize)
+            .ok_or(PldmCodecError::InvalidData)?;
+        for entry in entries {
+            let bytes = entry.encode(&mut buffer[offset..])?;
             offset += bytes;
         }
 
@@ -396,6 +397,17 @@ mod test {
         assert_eq!(
             FirmwareParameters::decode(&short_buffer).unwrap_err(),
             PldmCodecError::BufferTooShort
+        );
+    }
+
+    #[test]
+    fn test_get_firmware_parameters_encode_rejects_oversized_comp_count() {
+        let mut firmware_parameters = construct_firmware_params();
+        firmware_parameters.params_fixed.comp_count = MAX_COMPONENT_COUNT as u16 + 1;
+        let mut buffer = [0u8; 1024];
+        assert_eq!(
+            firmware_parameters.encode(&mut buffer).unwrap_err(),
+            PldmCodecError::InvalidData
         );
     }
 
