@@ -125,8 +125,12 @@ impl FirmwareParameters {
         }
         bytes += self.params_fixed.active_comp_image_set_ver_str_len as usize;
 
-        for i in 0..self.params_fixed.comp_count as usize {
-            bytes += self.comp_param_table[i].codec_size_in_bytes();
+        for comp in self
+            .comp_param_table
+            .iter()
+            .take(self.params_fixed.comp_count as usize)
+        {
+            bytes += comp.codec_size_in_bytes();
         }
         bytes
     }
@@ -154,8 +158,12 @@ impl PldmCodec for FirmwareParameters {
             offset += len;
         }
 
-        for i in 0..self.params_fixed.comp_count as usize {
-            let bytes = self.comp_param_table[i].encode(&mut buffer[offset..])?;
+        for comp in self
+            .comp_param_table
+            .iter()
+            .take(self.params_fixed.comp_count as usize)
+        {
+            let bytes = comp.encode(&mut buffer[offset..])?;
             offset += bytes;
         }
 
