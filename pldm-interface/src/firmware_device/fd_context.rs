@@ -80,6 +80,18 @@ pub struct FirmwareDeviceContext<'a, O: FdOps> {
     internal: FdInternal,
 }
 
+// Where a cancel finds the component transfer.
+#[derive(PartialEq)]
+enum TransferPhase {
+    // Download, Verify, or an Apply that has not succeeded: FdOps must stop or
+    // clean it up.
+    Running,
+    // Apply succeeded and ApplyComplete awaits the UA: nothing to abort.
+    ApplyDone,
+    // Not in Download/Verify/Apply.
+    Outside,
+}
+
 impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
     #[allow(clippy::new_without_default)]
     pub fn new(ops: &'a O) -> Self {
@@ -567,6 +579,22 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
         }
     }
 
+    fn transfer_phase(&self, fd_state: FirmwareDeviceState) -> TransferPhase {
+        match fd_state {
+            FirmwareDeviceState::Download | FirmwareDeviceState::Verify => TransferPhase::Running,
+            FirmwareDeviceState::Apply => {
+                if self.internal.is_fd_req_complete()
+                    && self.internal.get_fd_req_result() == Some(ApplyResult::ApplySuccess as u8)
+                {
+                    TransferPhase::ApplyDone
+                } else {
+                    TransferPhase::Running
+                }
+            }
+            _ => TransferPhase::Outside,
+        }
+    }
+
     pub fn cancel_update_component_rsp(
         &mut self,
         payload: &mut [u8],
@@ -580,14 +608,10 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
         }
 
         let fd_state = self.internal.get_fd_state();
-        let should_cancel = match fd_state {
-            FirmwareDeviceState::Download | FirmwareDeviceState::Verify => true,
-            FirmwareDeviceState::Apply => {
-                // In apply state, only cancel if not completed successfully
-                !(self.internal.is_fd_req_complete()
-                    && self.internal.get_fd_req_result() == Some(ApplyResult::ApplySuccess as u8))
-            }
-            _ => {
+        let should_cancel = match self.transfer_phase(fd_state) {
+            TransferPhase::Running => true,
+            TransferPhase::ApplyDone => false,
+            TransferPhase::Outside => {
                 return generate_failure_response(
                     payload,
                     FwUpdateCompletionCode::InvalidStateForCommand as u8,
@@ -640,17 +664,9 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
         self.set_fd_t1_ts();
 
         let fd_state = self.internal.get_fd_state();
-        let should_cancel = match fd_state {
-            FirmwareDeviceState::Download | FirmwareDeviceState::Verify => true,
-            FirmwareDeviceState::Apply => {
-                // In apply state, only cancel if not completed successfully
-                !(self.internal.is_fd_req_complete()
-                    && self.internal.get_fd_req().result == Some(ApplyResult::ApplySuccess as u8))
-            }
-            _ => false,
-        };
-
-        if should_cancel {
+        // DSP0267: CancelUpdate succeeds from any update-mode state; only a
+        // running transfer needs FdOps to abort it.
+        if self.transfer_phase(fd_state) == TransferPhase::Running {
             self.ops
                 .cancel_update_component(&self.internal.get_component())
                 .map_err(MsgHandlerError::FdOps)?;
@@ -661,11 +677,7 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
             Ok(req) => req,
             Err(e) => return generate_failure_response(payload, decode_failure_code(e)),
         };
-        let completion_code = if should_cancel {
-            PldmBaseCompletionCode::Success as u8
-        } else {
-            PldmBaseCompletionCode::Error as u8
-        };
+        let completion_code = PldmBaseCompletionCode::Success as u8;
 
         let (non_functioning_component_indication, non_functioning_component_bitmap) = self
             .ops
@@ -681,10 +693,7 @@ impl<'a, O: FdOps> FirmwareDeviceContext<'a, O> {
 
         match resp.encode(payload) {
             Ok(bytes) => {
-                if should_cancel {
-                    // Set FD state to 'Idle'
-                    self.internal.set_fd_idle(GetStatusReasonCode::CancelUpdate);
-                }
+                self.internal.set_fd_idle(GetStatusReasonCode::CancelUpdate);
                 Ok(bytes)
             }
             Err(_) => {
@@ -1268,6 +1277,8 @@ mod tests {
         devid_count: usize,
         // Make query_download_progress write a percentage and then fail.
         progress_fails: bool,
+        // Make cancel_update_component fail, so a test can see whether it ran.
+        cancel_fails: bool,
         // What handle_pending_component answers an activate pending component
         // request with.
         pending_result: PendingComponentResult,
@@ -1277,6 +1288,15 @@ mod tests {
     static TEST_FD_OPS: TestFdOps = TestFdOps {
         devid_count: 1,
         progress_fails: false,
+        cancel_fails: false,
+        pending_result: PendingComponentResult::Activated(TEST_PENDING_ACTIVATION_SECS),
+        security_revision_result: SecurityRevisionResult::Updated,
+    };
+
+    static TEST_FD_OPS_CANCEL_FAILS: TestFdOps = TestFdOps {
+        devid_count: 1,
+        progress_fails: false,
+        cancel_fails: true,
         pending_result: PendingComponentResult::Activated(TEST_PENDING_ACTIVATION_SECS),
         security_revision_result: SecurityRevisionResult::Updated,
     };
@@ -1284,6 +1304,7 @@ mod tests {
     static TEST_FD_OPS_NO_SECURITY_REVISION: TestFdOps = TestFdOps {
         devid_count: 1,
         progress_fails: false,
+        cancel_fails: false,
         pending_result: PendingComponentResult::Activated(TEST_PENDING_ACTIVATION_SECS),
         security_revision_result: SecurityRevisionResult::NotPermitted,
     };
@@ -1291,6 +1312,7 @@ mod tests {
     static TEST_FD_OPS_NO_DEVID: TestFdOps = TestFdOps {
         devid_count: 0,
         progress_fails: false,
+        cancel_fails: false,
         pending_result: PendingComponentResult::Activated(TEST_PENDING_ACTIVATION_SECS),
         security_revision_result: SecurityRevisionResult::Updated,
     };
@@ -1298,6 +1320,7 @@ mod tests {
     static TEST_FD_OPS_EXTRA_DEVID: TestFdOps = TestFdOps {
         devid_count: MAX_DESCRIPTORS_COUNT + 1,
         progress_fails: false,
+        cancel_fails: false,
         pending_result: PendingComponentResult::Activated(TEST_PENDING_ACTIVATION_SECS),
         security_revision_result: SecurityRevisionResult::Updated,
     };
@@ -1305,6 +1328,7 @@ mod tests {
     static TEST_FD_OPS_PROGRESS_FAILS: TestFdOps = TestFdOps {
         devid_count: 1,
         progress_fails: true,
+        cancel_fails: false,
         pending_result: PendingComponentResult::Activated(TEST_PENDING_ACTIVATION_SECS),
         security_revision_result: SecurityRevisionResult::Updated,
     };
@@ -1312,6 +1336,7 @@ mod tests {
     static TEST_FD_OPS_REJECT_PENDING: TestFdOps = TestFdOps {
         devid_count: 1,
         progress_fails: false,
+        cancel_fails: false,
         pending_result: PendingComponentResult::NotPermitted,
         security_revision_result: SecurityRevisionResult::Updated,
     };
@@ -1319,6 +1344,7 @@ mod tests {
     static TEST_FD_OPS_NO_PENDING_IMAGE: TestFdOps = TestFdOps {
         devid_count: 1,
         progress_fails: false,
+        cancel_fails: false,
         pending_result: PendingComponentResult::ActivationNotRequired,
         security_revision_result: SecurityRevisionResult::Updated,
     };
@@ -1419,6 +1445,9 @@ mod tests {
             &self,
             _component: &FirmwareComponent,
         ) -> Result<(), crate::firmware_device::fd_ops::FdOpsError> {
+            if self.cancel_fails {
+                return Err(crate::firmware_device::fd_ops::FdOpsError::CancelUpdateError);
+            }
             Ok(())
         }
 
@@ -1883,6 +1912,96 @@ mod tests {
         assert_eq!(
             completion_code,
             FwUpdateCompletionCode::NotInUpdateMode as u8
+        );
+    }
+
+    // Sends one CancelUpdate with ops whose cancel_update_component fails.
+    fn cancel_update_from(
+        state: FirmwareDeviceState,
+    ) -> (
+        FirmwareDeviceContext<'static, TestFdOps>,
+        Result<usize, MsgHandlerError>,
+        [u8; 256],
+    ) {
+        let mut fd_ctx = fd_ctx_with(&TEST_FD_OPS_CANCEL_FAILS);
+        fd_ctx.internal.set_fd_state(state);
+        let mut buffer = [0u8; 256];
+        CancelUpdateRequest::new(0x07, PldmMsgType::Request)
+            .encode(&mut buffer)
+            .unwrap();
+        let result = fd_ctx.cancel_update_rsp(&mut buffer);
+        (fd_ctx, result, buffer)
+    }
+
+    // DSP0267: CancelUpdate exits update mode from any update-mode state.
+    // Success here also shows FdOps was not asked to abort, since that call
+    // fails.
+    #[test]
+    fn test_cancel_update_from_non_transfer_states() {
+        for state in [
+            FirmwareDeviceState::LearnComponents,
+            FirmwareDeviceState::ReadyXfer,
+            FirmwareDeviceState::Activate,
+        ] {
+            let (fd_ctx, result, buffer) = cancel_update_from(state.clone());
+
+            let bytes = result.unwrap_or_else(|e| panic!("{state:?}: {e:?}"));
+            let resp = CancelUpdateResponse::decode(&buffer[..bytes]).unwrap();
+            assert_eq!(
+                { resp.completion_code },
+                PldmBaseCompletionCode::Success as u8,
+                "{state:?}"
+            );
+            assert_eq!(fd_ctx.internal.get_fd_state(), FirmwareDeviceState::Idle);
+            assert_eq!(
+                fd_ctx.internal.get_fd_reason(),
+                Some(GetStatusReasonCode::CancelUpdate)
+            );
+        }
+    }
+
+    // Control for the test above: with a transfer running, FdOps is called.
+    #[test]
+    fn test_cancel_update_in_download_calls_fd_ops() {
+        let (fd_ctx, result, _) = cancel_update_from(FirmwareDeviceState::Download);
+
+        assert!(matches!(result, Err(MsgHandlerError::FdOps(_))));
+        assert_eq!(
+            fd_ctx.internal.get_fd_state(),
+            FirmwareDeviceState::Download
+        );
+    }
+
+    // Apply succeeded and ApplyComplete awaits the UA: nothing to abort, but
+    // CancelUpdate still exits update mode.
+    #[test]
+    fn test_cancel_update_after_apply_success() {
+        let mut fd_ctx = fd_ctx_with(&TEST_FD_OPS_CANCEL_FAILS);
+        fd_ctx.internal.set_fd_state(FirmwareDeviceState::Apply);
+        fd_ctx.internal.set_fd_req(
+            FdReqState::Sent,
+            true,
+            Some(ApplyResult::ApplySuccess as u8),
+            Some(0),
+            Some(FwUpdateCmd::ApplyComplete as u8),
+            Some(0),
+        );
+        let mut buffer = [0u8; 256];
+        CancelUpdateRequest::new(0x07, PldmMsgType::Request)
+            .encode(&mut buffer)
+            .unwrap();
+
+        let bytes = fd_ctx.cancel_update_rsp(&mut buffer).unwrap();
+
+        let resp = CancelUpdateResponse::decode(&buffer[..bytes]).unwrap();
+        assert_eq!(
+            { resp.completion_code },
+            PldmBaseCompletionCode::Success as u8
+        );
+        assert_eq!(fd_ctx.internal.get_fd_state(), FirmwareDeviceState::Idle);
+        assert_eq!(
+            fd_ctx.internal.get_fd_reason(),
+            Some(GetStatusReasonCode::CancelUpdate)
         );
     }
 
