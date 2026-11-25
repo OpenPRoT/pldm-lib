@@ -12,5 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod crc;
 pub mod fw_component;
 pub mod mctp_transport;

@@ -14,3 +14,4 @@
 
 pub mod control;
 pub mod firmware_update;
+pub mod platform;
